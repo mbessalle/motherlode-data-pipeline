@@ -1,8 +1,10 @@
 name: Mining Articles Pipeline
 
 on:
+  push: # <--- NEW: Add this line
+    branches: [ main ] # <--- NEW: Add this line to specify which branch pushes trigger
   schedule:
-    - cron: '0 */1 * * *'  # Runs at the top of every 2nd hour
+    - cron: '0 */1 * * *'  # Now runs at the top of every hour (or */2 if you revert)
   workflow_dispatch:          # Allows manual runs from the Actions tab
 
 jobs:
