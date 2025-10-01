@@ -3,4 +3,4 @@ playwright
 psycopg2-binary
 python-dotenv
 openai
-pymupdf4llm
+pandas
