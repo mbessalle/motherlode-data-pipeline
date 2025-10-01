@@ -36,9 +36,9 @@ def run():
     payload = {
         "lastIds": {}, "commodities": {"data": [], "options": {"anyAll": "any"}},
         "daterange": {
-            "startDate":  "2025-09-28T22:00:00.257Z",
-            "endDate": "2025-10-01T21:59:59.257Z",
-            "timezoneOffset": -120, "option": "week"
+            "startDate": start_of_today_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+            "endDate": now_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+            "timezoneOffset": -120, "option": "custom"
         },
         "deposits": {"data": [], "options": {"anyAll": "any"}}, "marketcap": [None, None],
         "nsr": {"data": ["Any"]}, "outstandingShares": [None, None], "stages": {"data": []},
