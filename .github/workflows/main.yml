@@ -1,17 +1,21 @@
-name: Mining Articles Pipeline
+# .github/workflows/main.yml
+name: Mining News Pipeline
 
 on:
-  push: # <--- NEW: Add this line
-    branches: [ main ] # <--- NEW: Add this line to specify which branch pushes trigger
+  # Run automatically once a day at 8:00 AM UTC
   schedule:
-    - cron: '0 */1 * * *'  # Now runs at the top of every hour (or */2 if you revert)
-  workflow_dispatch:          # Allows manual runs from the Actions tab
+    - cron: '0 8 * * *'
+  
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
-  run-pipeline:
+  build-and-process:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository code
+      - name: Check out repository
+        # This is important so the orchestrator can commit back
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -19,16 +23,23 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install Playwright browsers and dependencies
+      - name: Install Playwright Browsers
         run: python -m playwright install --with-deps
 
-      - name: Run the entire pipeline
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: Run the entire pipeline via Orchestrator
         run: python orchestrator.py
+        env:
+          # Pass all secrets to the environment, where the orchestrator
+          # and its child scripts can access them via os.getenv()
+          user: ${{ secrets.DB_USER }}
+          password: ${{ secrets.DB_PASSWORD }}
+          host: ${{ secrets.DB_HOST }}
+          port: ${{ secrets.DB_PORT }}
+          dbname: ${{ secrets.DB_NAME }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
