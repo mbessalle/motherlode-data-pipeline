@@ -4,7 +4,7 @@ name: Mining News Pipeline
 on:
   # Run automatically once a day at 8:00 AM UTC
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 */4 * * *'
   
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -48,3 +48,4 @@ jobs:
           dbname: ${{ secrets.DB_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+
