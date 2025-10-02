@@ -270,6 +270,9 @@ if __name__ == "__main__":
                     if not llm_extracted_data:
                         print(f"   -> No data extracted by LLM for '{project_name}'.")
                         continue
+                    
+                    if 'stage_scrapped' in llm_extracted_data and llm_extracted_data['stage_scrapped']:
+                        llm_extracted_data['stage_scrapped'] = llm_extracted_data['stage_scrapped'][:50]
 
                     llm_extracted_data['news_link'] = link
                     llm_extracted_data['news_title'] = article.get('title')
@@ -286,6 +289,7 @@ if __name__ == "__main__":
                             print(f"   -> New record added successfully.")
                         except psycopg2.Error as e:
                             print(f"   ❌ DATABASE ERROR on INSERT: {e}")
+                            connection.rollback()
 
                     elif status == 'existing':
                         print(f"   ✔ Attempting UPDATE in '{table_name}'...")
@@ -295,6 +299,7 @@ if __name__ == "__main__":
                             print(f"   -> Record updated successfully.")
                         except psycopg2.Error as e:
                             print(f"   ❌ DATABASE ERROR on UPDATE: {e}")
+                            connection.rollback()
                         
                 finally:
                     if page: page.close()
@@ -312,4 +317,3 @@ if __name__ == "__main__":
         if connection:
             connection.close()
             print("Database connection closed.")
-
