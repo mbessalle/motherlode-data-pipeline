@@ -7,7 +7,6 @@ import psycopg2.sql
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Error
 
-# --- 1. Configuration ---
 load_dotenv()
 DB_USER = os.getenv("user")
 DB_PASSWORD = os.getenv("password")
@@ -22,8 +21,6 @@ if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME, OPENAI_API_KEY]):
 
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# --- 2. THE DEFINITIVE "INTELLIGENT ANALYST" PROMPT ---
-# PASTE YOUR FULL, DETAILED SYSTEM PROMPT FOR THE ADVANCED LLM HERE
 SYSTEM_PROMPT = """
 You are a meticulous and highly precise financial analyst for the mining industry, specializing in Mergers and Acquisitions (M&A). Your task is to analyze a news article and generate a structured JSON output for a database update. You must follow a strict cognitive workflow and prove your understanding by referencing the provided database schema.
 
@@ -92,7 +89,6 @@ You are a meticulous and highly precise financial analyst for the mining industr
 - nsr_percent: (numeric) The reported Net Smelter Royalty (NSR) or GRR as a percentage.
 - news_date: (date) The date of the news article in YYYY-MM-DD format.
 ---
-
 **ADDITIONAL RULES TO APPLY DURING ANALYSIS:**
 - **DATA RELEVANCE:** Only extract data for the primary project of interest.
 - **SHARED COMMITMENTS:** If a value is shared between N projects, use `VALUE / N`.
@@ -100,10 +96,7 @@ You are a meticulous and highly precise financial analyst for the mining industr
 - **EXPLORATION COMMITMENTS:** If given in meters, convert to USD (1 meter = 250 USD).
 """
 
-# --- 3. GENERALIZED Database Functions ---
-
 def fetch_single_project_record(connection, table_name, project_name):
-    """Fetches a single project record from a DYNAMICALLY specified table."""
     record = None
     query = psycopg2.sql.SQL("SELECT * FROM {} WHERE project_name = %s").format(
         psycopg2.sql.Identifier(table_name)
@@ -119,46 +112,38 @@ def fetch_single_project_record(connection, table_name, project_name):
     return record
 
 def update_project_in_db(connection, table_name, project_name, updates):
-    """Updates a project in the specified continent table."""
-    if not updates: return
+    if not updates:
+        return
     for key, value in updates.items():
-        if value == "": updates[key] = None
-    
+        if value == "":
+            updates[key] = None
     set_clauses = [psycopg2.sql.SQL("{} = %s").format(psycopg2.sql.Identifier(key)) for key in updates.keys()]
-    
     sql_query = psycopg2.sql.SQL("UPDATE {} SET {} WHERE project_name = %s").format(
         psycopg2.sql.Identifier(table_name),
         psycopg2.sql.SQL(', ').join(set_clauses)
     )
-    
     values = list(updates.values()) + [project_name]
     with connection.cursor() as cursor:
         cursor.execute(sql_query, values)
         connection.commit()
 
 def add_project_to_db(connection, table_name, project_data):
-    """Inserts a new project into the specified continent table."""
     if not project_data or 'project_name' not in project_data:
         print("   -> Skipping add: project_name is missing.")
         return
-    
     for key, value in project_data.items():
-        if value == "": project_data[key] = None
-    
+        if value == "":
+            project_data[key] = None
     columns = project_data.keys()
     values = project_data.values()
-    
     sql_query = psycopg2.sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
         psycopg2.sql.Identifier(table_name),
         psycopg2.sql.SQL(', ').join(map(psycopg2.sql.Identifier, columns)),
         psycopg2.sql.SQL(', ').join(psycopg2.sql.SQL('%s') for _ in values)
     )
-    
     with connection.cursor() as cursor:
         cursor.execute(sql_query, list(values))
         connection.commit()
-
-# --- 4. Scrape & Analyze Functions ---
 
 def scrape_article_with_playwright(page, url):
     try:
@@ -171,9 +156,11 @@ def scrape_article_with_playwright(page, url):
         return None
 
 def analyze_content_with_llm(article_text, project_record):
-    existing_data_str = "\n".join([f"- {key}: {value}" for key, value in project_record.items() if value is not None])
+    # Ensure project_record is a dict to avoid NoneType errors when iterating
+    safe_project_record = project_record or {}
+    existing_data_str = "\n".join([f"- {key}: {value}" for key, value in safe_project_record.items() if value is not None])
     user_prompt = f"""
-    **Primary Project of Interest:** '{project_record.get('project_name')}'
+    **Primary Project of Interest:** '{safe_project_record.get('project_name')}'
     **Existing Database Record (if any):**
     {existing_data_str}
     **News Article Content:**
@@ -201,7 +188,6 @@ def analyze_content_with_llm(article_text, project_record):
         print(f"   -> LLM analysis or parsing failed. Error: {e}")
         return {}
 
-# --- 5. Main Execution ---
 if __name__ == "__main__":
     articles_json_file = 'classified_articles.json'
     connection = None
@@ -210,7 +196,6 @@ if __name__ == "__main__":
             user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT, dbname=DB_NAME
         )
         print("Database connection successful!")
-        
         articles_to_process = []
         try:
             with open(articles_json_file, 'r', encoding='utf-8') as f:
@@ -219,43 +204,47 @@ if __name__ == "__main__":
             print(f"Error loading {articles_json_file}: {e}")
             print("Please run the 'classify_articles.py' script first.")
             exit()
-        
         updates_made_count = 0
         inserts_made_count = 0
         print(f"\n--- Found {len(articles_to_process)} classified articles to process. Starting execution. ---\n")
-        
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             for article in articles_to_process:
-                classification = article['classification']
-                status = classification['status']
-                
-                if status == 'unclassified':
-                    project_name_for_log = article.get('project_name', 'Unknown')
-                    print(f"-> Skipping '{project_name_for_log}': Article is marked as unclassified.")
+                classification = article.get('classification', {})
+                status = classification.get('status')
+                project_name = article.get('project_name')
+                if not project_name:
+                    print("-> Skipping article: missing project_name.")
                     print("-" * 20)
                     continue
-
-                table_name = classification['table_name']
-                project_name = article['project_name']
-                
+                if status == 'unclassified':
+                    table_name = 'other'
+                    project_record_for_llm = fetch_single_project_record(connection, table_name, project_name)
+                    if project_record_for_llm:
+                        status = 'existing'
+                        print(f"-> Unclassified article: found existing '{project_name}' in 'other' table. Will UPDATE.")
+                    else:
+                        status = 'new'
+                        project_record_for_llm = {'project_name': project_name}
+                        print(f"-> Unclassified article: '{project_name}' not found in 'other' table. Will INSERT into 'other'.")
+                else:
+                    table_name = classification.get('table_name')
+                    if not table_name:
+                        print(f"-> Skipping '{project_name}': classification missing table_name.")
+                        print("-" * 20)
+                        continue
+                    if status == 'existing':
+                        project_record_for_llm = fetch_single_project_record(connection, table_name, project_name)
+                        if not project_record_for_llm:
+                            print(f"   -> WARNING: Classified as 'existing' but not found in DB. Treating as 'new'.")
+                            status = 'new'
+                    if status == 'new':
+                        project_record_for_llm = {'project_name': project_name}
                 print(f"-> Processing '{project_name}' for table '{table_name}' (Status: {status})")
-
                 link = article.get('link')
                 if not link:
                     print("   -> Skipping: No link provided.\n")
                     continue
-
-                project_record_for_llm = {}
-                if status == 'existing':
-                    project_record_for_llm = fetch_single_project_record(connection, table_name, project_name)
-                    if not project_record_for_llm:
-                        print(f"   -> WARNING: Classified as 'existing' but not found in DB. Treating as 'new'.")
-                        status = 'new'
-                
-                if status == 'new':
-                    project_record_for_llm = {'project_name': project_name}
-                
                 page = None
                 try:
                     page = browser.new_page()
@@ -263,22 +252,17 @@ if __name__ == "__main__":
                     if not content:
                         print("   -> Skipping: Could not retrieve article content.\n")
                         continue
-                    
                     print("   -> Analyzing content with advanced LLM...")
                     llm_extracted_data = analyze_content_with_llm(content, project_record_for_llm)
-                    
                     if not llm_extracted_data:
                         print(f"   -> No data extracted by LLM for '{project_name}'.")
                         continue
-                    
                     if 'stage_scrapped' in llm_extracted_data and llm_extracted_data['stage_scrapped']:
                         llm_extracted_data['stage_scrapped'] = llm_extracted_data['stage_scrapped'][:50]
-
                     llm_extracted_data['news_link'] = link
                     llm_extracted_data['news_title'] = article.get('title')
                     if article.get('date'):
                         llm_extracted_data['news_date'] = article.get('date').split('T')[0]
-
                     if status == 'new':
                         new_project_record = {'project_name': project_name}
                         new_project_record.update(llm_extracted_data)
@@ -290,7 +274,6 @@ if __name__ == "__main__":
                         except psycopg2.Error as e:
                             print(f"   ❌ DATABASE ERROR on INSERT: {e}")
                             connection.rollback()
-
                     elif status == 'existing':
                         print(f"   ✔ Attempting UPDATE in '{table_name}'...")
                         try:
@@ -300,19 +283,16 @@ if __name__ == "__main__":
                         except psycopg2.Error as e:
                             print(f"   ❌ DATABASE ERROR on UPDATE: {e}")
                             connection.rollback()
-                        
                 finally:
-                    if page: page.close()
+                    if page:
+                        page.close()
                     print("-" * 20)
             browser.close()
-
         print("\n--- Processing Complete ---")
         print(f"Total new records added: {inserts_made_count}")
         print(f"Total existing records updated: {updates_made_count}")
-
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-    
     finally:
         if connection:
             connection.close()
