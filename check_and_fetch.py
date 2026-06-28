@@ -43,7 +43,7 @@ def run():
         "deposits": {"data": [], "options": {"anyAll": "any"}}, "marketcap": [None, None],
         "nsr": {"data": ["Any"]}, "outstandingShares": [None, None], "stages": {"data": []},
         "tags": {
-            "data": ["Mergers & Acquisitions", "Project Acquisition"],
+            "data": ["Mergers & Acquisitions", "Joint Venture", "Project Acquisition", "Strategic Investment"],
             "options": {"anyAll": "any"}
         }
     }
