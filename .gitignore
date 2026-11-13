@@ -28,3 +28,4 @@ last_run_articles.json
 # Build output
 build/
 *.egg-info/
+run_report.json

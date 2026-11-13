@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import collections
 import functools
+import json
 
 from . import config, llm, sources, telemetry
 from .graph import Deps, build_graph, process_article
@@ -40,6 +41,9 @@ def run(settings=None, store=None, scrape=None, client=None, fetch=sources.fetch
     with telemetry.span("pipeline_run") as run_span:
         last_id = sources.read_state(STATE_FILE)
         articles = sources.new_since(fetch(), last_id)
+        if settings.max_articles:
+            # Oldest first, so the articles left out are picked up by the next run.
+            articles = articles[: settings.max_articles]
         run_span.set_attribute("pipeline.articles.new", len(articles))
         if not articles:
             print("[pipeline] No new articles.")
@@ -62,12 +66,20 @@ def run(settings=None, store=None, scrape=None, client=None, fetch=sources.fetch
             app = build_graph(deps)
             locate = functools.partial(llm.classify_location, client, settings.classify_model)
             outcomes: collections.Counter = collections.Counter()
+            report = []
             for article in articles:
                 if article.get("project_name"):
                     article["classification"] = classify(article, locate, store)
                 final = process_article(app, article)
                 outcome = final.get("outcome", "unknown")
                 outcomes[outcome] += 1
+                report.append({
+                    "id": article.get("id"), "project_name": article.get("project_name"), "title": article.get("title"),
+                    "link": article.get("link"), "classification": article.get("classification"),
+                    "table": final.get("table"), "status": final.get("status"), "outcome": outcome,
+                    "attempts": final.get("attempts", 0), "article_chars": len(final.get("text") or ""),
+                    "extraction": final.get("extraction"), "withheld": final.get("withheld"), "validation": final.get("report"),
+                })
                 print(f"[pipeline] {article.get('id')} {article.get('project_name')!r}: {outcome}"
                       + (f" (withheld: {', '.join(final['withheld'])})" if final.get("withheld") else ""))
         finally:
@@ -78,5 +90,7 @@ def run(settings=None, store=None, scrape=None, client=None, fetch=sources.fetch
 
         # Only after every article was handled is the newest id recorded, so a crashed run is retried in full.
         sources.write_state(STATE_FILE, str(articles[-1]["id"]))
+        with open(settings.run_report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=1, default=str)   # what each article produced, for a person to inspect
         run_span.set_attribute("pipeline.outcomes", ", ".join(f"{k}={v}" for k, v in sorted(outcomes.items())))
         return {"articles": len(articles), "outcomes": dict(outcomes)}

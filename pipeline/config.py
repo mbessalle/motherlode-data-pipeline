@@ -27,6 +27,8 @@ class Settings:
     classify_model: str
     max_extract_attempts: int
     review_queue_path: str
+    max_articles: int = 0          # 0 = no limit; a small number makes a first or manual run easy to inspect
+    run_report_path: str = "run_report.json"
 
     @property
     def db_ready(self) -> bool:
@@ -46,4 +48,6 @@ def load() -> Settings:
         classify_model=os.getenv("CLASSIFY_MODEL", "gpt-6-luna"),
         max_extract_attempts=int(os.getenv("MAX_EXTRACT_ATTEMPTS", "2")),
         review_queue_path=os.getenv("REVIEW_QUEUE_PATH", "review_queue.jsonl"),
+        max_articles=int(os.getenv("MAX_ARTICLES") or 0),
+        run_report_path=os.getenv("RUN_REPORT_PATH", "run_report.json"),
     )

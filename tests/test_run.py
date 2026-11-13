@@ -79,10 +79,25 @@ def test_full_run_offline(tmp_path, monkeypatch):
     client = FakeClient([{"country": "Canada", "continent": "North America"},
                          {"reasoning_and_acknowledgement": {}, "database_updates": {"cash_payments_value": 100000, "nsr_percent": 2}}])
     store = MemoryStore({"north_america": []})
-    settings = config.Settings(None, None, None, None, None, "k", "extract-model", "classify-model", 2, str(tmp_path / "review.jsonl"))
+    settings = config.Settings(None, None, None, None, None, "k", "extract-model", "classify-model", 2, str(tmp_path / "review.jsonl"),
+                               run_report_path=str(tmp_path / "report.json"))
     summary = run.run(settings=settings, store=store, client=client, fetch=lambda: listing,
                       scrape=lambda url: "NewCo will pay $100,000 in cash. The vendor keeps a 2% NSR.")
     assert summary == {"articles": 2, "outcomes": {"skipped_no_project": 1, "inserted": 1}}
     assert store.tables["north_america"][0]["project_name"] == "Acme"
     assert [r["model"] for r in client.requests] == ["classify-model", "extract-model"]
     assert sources.read_state(run.STATE_FILE) == "12"
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert [(r["id"], r["outcome"], r["table"]) for r in report] == [(11, "skipped_no_project", None), (12, "inserted", "north_america")]
+    assert report[1]["extraction"]["cash_payments_value"] == 100000 and report[1]["validation"]["passed"]
+
+
+def test_article_limit_leaves_the_rest_for_the_next_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    listing = [{"id": n, "project_name": None, "link": f"https://example.test/{n}", "date": "2025-03-01T08:00:00Z"} for n in (5, 4, 3, 2, 1)]
+    settings = config.Settings(None, None, None, None, None, "k", "m", "m", 2, str(tmp_path / "review.jsonl"), max_articles=2,
+                               run_report_path=str(tmp_path / "report.json"))
+    kwargs = dict(settings=settings, store=MemoryStore(), client=FakeClient([]), fetch=lambda: listing, scrape=lambda url: None)
+    assert run.run(**kwargs)["articles"] == 2 and sources.read_state(run.STATE_FILE) == "2"     # the two oldest
+    assert run.run(**kwargs)["articles"] == 2 and sources.read_state(run.STATE_FILE) == "4"     # then the next two
+    assert run.run(**kwargs)["articles"] == 1 and sources.read_state(run.STATE_FILE) == "5"
