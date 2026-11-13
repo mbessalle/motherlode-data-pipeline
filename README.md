@@ -16,7 +16,8 @@ every step is traced.
 | **OpenTelemetry** | One trace per run, GenAI attributes (model, tokens) on every model call |
 | **Evals** | 33 real press releases: **98% of extracted numbers are supported by the source** |
 | **Pydantic** | Typed schema for every model reply: types, ranges, ISO currencies, dates; a reply that breaks it is not written |
-| **Deterministic validation** | Unit-aware grounding of every number; 67 offline tests; CI on every push |
+| **Deterministic validation** | Unit-aware grounding of every number; 69 offline tests; CI on every push |
+| **Measured model choice** | A decision-model API benchmarked against chat calls on accuracy, latency and cost before deciding |
 | **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
 
 ## A real run, traced
@@ -150,6 +151,24 @@ Full output: [`evals/results/`](evals/results/). Model replies are cached, so re
 change costs nothing; that loop found three validator gaps (spelled-out percentages, unit mixing in sums,
 share values priced from the article) that are now tests.
 
+## Model choice is measured
+
+The screening step asks two closed questions per announcement: is it a project deal, and on which continent.
+OpenAI's Decisions API is built for exactly that (typed answers with probabilities, no generated text), so
+[`evals/compare_screening.py`](evals/compare_screening.py) ran it against the pipeline's two chat calls on 43
+labelled announcements, one after the other.
+
+| | Calls | Deal or not, correct | Continent, correct | Median latency | Tokens in / out | Cost per 1,000 |
+|---|---|---|---|---|---|---|
+| Two chat calls (`gpt-6-luna`) | 2 | **41 of 43** | **40 of 40** | 3.89 s | 1592 / 195 | $0.26 |
+| One Decisions API call (`gpt-6-luna`) | 1 | 38 of 43 | 39 of 40 | **0.61 s** | 1229 / 0 | **$0.12** |
+
+The decision model is about six times faster and half the cost, and it is not adopted: it missed five real
+deals where the chat path missed two, and its misses came with near-zero probabilities, so a confidence
+threshold would not have caught them. At a fraction of a cent per announcement, accuracy is the right thing to
+buy here. The call is implemented and tested in [`pipeline/decisions.py`](pipeline/decisions.py), so the comparison can be
+re-run when the endpoint or the prompt changes. Full output: [`evals/results/screening-comparison.md`](evals/results/screening-comparison.md).
+
 ## Tracing
 
 Every article is one OpenTelemetry trace: `process_article` → `scrape` → `extract` → `validate` → `store`, with
@@ -188,7 +207,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 67 tests, offline: no API key, database or network needed
+pytest                      # 69 tests, offline: no API key, database or network needed
 ruff check .
 
 cp .env.example .env        # database, OpenAI and search settings
@@ -209,6 +228,7 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 | Path | What it holds |
 |---|---|
 | [`pipeline/graph.py`](pipeline/graph.py) | The per-article state machine and its routing |
+| [`pipeline/decisions.py`](pipeline/decisions.py) | Screening through the Decisions API, kept for the comparison |
 | [`pipeline/schema.py`](pipeline/schema.py) | Pydantic models for the extraction and the triage reply |
 | [`pipeline/validate.py`](pipeline/validate.py) | Deterministic grounding and derivation checks |
 | [`pipeline/llm.py`](pipeline/llm.py), [`pipeline/prompts.py`](pipeline/prompts.py) | The two model calls, traced; prompts kept as they ran in production |
