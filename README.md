@@ -218,6 +218,7 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 | [`pipeline/telemetry.py`](pipeline/telemetry.py) | OpenTelemetry setup |
 | [`evals/`](evals/) | Eval cases, runner and results |
 | [`tools/integrity_checks.sql`](tools/integrity_checks.sql) | Read-only checks for the tables themselves |
+| [`docs/extraction-rules/`](docs/extraction-rules/) | The domain rules behind the prompt, written on ~700 historical transactions |
 | [`tests/`](tests/) | Validator rules, every exit of the graph, the search identity test, the run end to end |
 
 ## Design decisions
