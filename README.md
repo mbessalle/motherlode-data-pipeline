@@ -1,14 +1,49 @@
 # Mining M&A news → structured deal database
 
-An unattended pipeline that reads mining-industry deal announcements and writes their terms
-(cash, shares, royalties, interest acquired, commitments) into a Postgres database, every four hours.
+[![CI](https://github.com/mbessalle/motherlode-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/mbessalle/motherlode-data-pipeline/actions/workflows/ci.yml)
+[![Pipeline](https://github.com/mbessalle/motherlode-data-pipeline/actions/workflows/main.yml/badge.svg)](https://github.com/mbessalle/motherlode-data-pipeline/actions/workflows/main.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-The extraction is done by an LLM. Everything that decides whether an extracted number is **allowed into the
-database** is plain code: each value is checked against the article it came from, values the article does not
-support are withheld and queued for a person, and every step is traced.
+An unattended LLM pipeline that reads mining deal announcements and writes their terms (cash, shares, royalties,
+interest acquired) into Postgres every four hours. The model extracts; **code decides what is allowed into the
+database**: every number is checked against the announcement, unsupported values are withheld for review, and
+every step is traced.
 
-On 33 real press releases, **98% of the numbers the model extracts are supported by the source text**
-and the remaining 2% are caught before they are written. [Results](#measured-results) · [How it is checked](#how-a-value-is-checked)
+| | |
+|---|---|
+| **LangGraph** | Per-article state machine with a validate → retry → quarantine loop |
+| **OpenTelemetry** | One trace per run, GenAI attributes (model, tokens) on every model call |
+| **Evals** | 33 real press releases: **98% of extracted numbers are supported by the source** |
+| **Deterministic validation** | Unit-aware grounding of every number; 54 offline tests; CI on every push |
+| **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
+
+## A real run, traced
+
+One run of the pipeline, viewed in [Jaeger](https://www.jaegertracing.io/): for each headline, find the announcement, screen it,
+classify the region, then extract → validate → store. 19 spans, 48 seconds, two deals.
+
+![Trace of one pipeline run in Jaeger: find_announcement, two triage and classify model calls, then process_article with scrape, extract, validate and store, for two articles](docs/img/trace-waterfall.png)
+
+Each model call carries the OpenTelemetry GenAI attributes, so cost and latency are visible per step:
+
+![An extraction model call opened in Jaeger showing gen_ai.request.model gpt-6.1-terra, 2164 input tokens and 1283 output tokens](docs/img/trace-llm-span.png)
+
+The same run in the log, printed as it happens:
+
+```
+[pipeline] 16378915 | headline  | Fuse Options Foggy Mountain Copper-Gold Project in BC [fuse battery metals inc]
+[pipeline] 16378915 | search    | ACCEPT https://ca.finance.yahoo.com/... (3 of 3 headline names and numbers)
+[pipeline] 16378915 | triage    | project deal; project 'Foggy Mountain'; Fuse entered into an option agreement to earn up to an 80% interest in the Foggy Mountain property.
+[pipeline] 16378915 | region    | North America -> table north_america (new)
+[pipeline] 16378915 | extract   | attempt 1: 21 fields filled
+[pipeline] 16378915 | validate  | 6 of 6 numbers supported
+[pipeline] 16378915 | store     | insert into north_america: 23 fields
+[pipeline] 16378915 | RESULT    | inserted; project 'Foggy Mountain'
+```
+
+Live runs: [Actions → Mining News Pipeline](https://github.com/mbessalle/motherlode-data-pipeline/actions/workflows/main.yml).
+[Results](#measured-results) · [How a value is checked](#how-a-value-is-checked) · [Run it](#run-it)
 
 ## How it works
 
@@ -134,7 +169,13 @@ each LLM call as a child span carrying the GenAI semantic-convention attributes.
 The `validate` span records how many values were checked, how many were supported and which were not, and the
 root span records how the article left the graph and how many attempts it took, so "why was this value not
 written?" is answered from the trace. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to send traces to any OTLP backend, or
-`PIPELINE_TRACE_CONSOLE=1` to print them. The spans are written by hand in
+`PIPELINE_TRACE_CONSOLE=1` to print them. To get the view above locally:
+
+```bash
+docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 python orchestrator.py
+# open http://localhost:16686 and pick the service "motherlode-data-pipeline"
+``` The spans are written by hand in
 [`pipeline/llm.py`](pipeline/llm.py) and [`pipeline/telemetry.py`](pipeline/telemetry.py) rather than by an
 auto-instrumentation package, because the GenAI conventions are still changing and the pipeline should not
 break when they do.
@@ -159,18 +200,6 @@ in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Each run writes `run_
 outcome, extraction, validation report, withheld values) and uploads it with the review queue as an artifact.
 A manual run takes `max_articles` to process only a few deal candidates; the rest are picked up by the next run.
 
-Every step prints one line as it happens, so a run can be followed live in the log. From a real run:
-
-```
-[pipeline] 16378915 | headline  | Fuse Options Foggy Mountain Copper-Gold Project in BC [fuse battery metals inc]
-[pipeline] 16378915 | search    | ACCEPT https://ca.finance.yahoo.com/... (3 of 3 headline names and numbers)
-[pipeline] 16378915 | triage    | project deal; project 'Foggy Mountain'; Fuse entered into an option agreement to acquire up to an 80% interest in the Foggy Mountain property.
-[pipeline] 16378915 | region    | North America -> table north_america (new)
-[pipeline] 16378915 | extract   | attempt 1: 21 fields filled
-[pipeline] 16378915 | validate  | 6 of 6 numbers supported
-[pipeline] 16378915 | store     | insert into north_america: 23 fields
-[pipeline] 16378915 | RESULT    | inserted; project 'Foggy Mountain'
-```
 
 ## Layout
 
