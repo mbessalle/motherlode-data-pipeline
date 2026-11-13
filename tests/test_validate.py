@@ -116,9 +116,9 @@ def test_schema_issues_block_even_when_values_are_grounded():
     report = validate({"nsr_percent": 2, "cash_payments_currency": "dollars", "news_date": "31/05/2023",
                        "shares_amount": "two million", "interest_acquired_percent": 150}, OPTION)
     assert not report.passed
-    joined = " | ".join(report.schema_issues)
-    for expected in ("cash_payments_currency", "news_date", "shares_amount", "interest_acquired_percent out of range"):
-        assert expected in joined
+    fields = sorted(issue.split(":")[0] for issue in report.schema_issues)
+    assert fields == ["cash_payments_currency", "interest_acquired_percent", "news_date", "shares_amount"]
+    assert any("less than or equal to 100" in issue for issue in report.schema_issues)
 
 
 def test_shares_value_from_a_price_the_article_states():

@@ -15,7 +15,8 @@ every step is traced.
 | **LangGraph** | Per-article state machine with a validate → retry → quarantine loop |
 | **OpenTelemetry** | One trace per run, GenAI attributes (model, tokens) on every model call |
 | **Evals** | 33 real press releases: **98% of extracted numbers are supported by the source** |
-| **Deterministic validation** | Unit-aware grounding of every number; 54 offline tests; CI on every push |
+| **Pydantic** | Typed schema for every model reply: types, ranges, ISO currencies, dates; a reply that breaks it is not written |
+| **Deterministic validation** | Unit-aware grounding of every number; 67 offline tests; CI on every push |
 | **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
 
 ## A real run, traced
@@ -108,7 +109,9 @@ Details that turned out to matter on real announcements, each pinned by a test:
 - Units count: "500,000 shares" is not evidence for a 500,000 cash payment, and a sum never mixes dollars with
   share counts or reuses an amount the article writes once.
 - A derived value is accepted only when its inputs are themselves supported.
-- Currency codes, dates, percentage and coordinate ranges are checked; a malformed record is not written at all.
+- The record must fit a [Pydantic schema](pipeline/schema.py) with the same 36 fields the prompt lists (a test keeps
+  the two in step): numbers, percentage and coordinate ranges, 3-letter currency codes, ISO dates. A malformed
+  record is not written at all; a valid one is stored with the schema's types and only its known columns.
 
 `DERIVED` is a plausibility test, not a proof, and the eval reports it separately from `FOUND`.
 
@@ -185,7 +188,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 54 tests, offline: no API key, database or network needed
+pytest                      # 67 tests, offline: no API key, database or network needed
 ruff check .
 
 cp .env.example .env        # database, OpenAI and search settings
@@ -206,7 +209,8 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 | Path | What it holds |
 |---|---|
 | [`pipeline/graph.py`](pipeline/graph.py) | The per-article state machine and its routing |
-| [`pipeline/validate.py`](pipeline/validate.py) | Deterministic grounding, derivation and schema checks |
+| [`pipeline/schema.py`](pipeline/schema.py) | Pydantic models for the extraction and the triage reply |
+| [`pipeline/validate.py`](pipeline/validate.py) | Deterministic grounding and derivation checks |
 | [`pipeline/llm.py`](pipeline/llm.py), [`pipeline/prompts.py`](pipeline/prompts.py) | The two model calls, traced; prompts kept as they ran in production |
 | [`pipeline/store.py`](pipeline/store.py) | Postgres writes, an in-memory twin for tests, the review queue |
 | [`pipeline/sources.py`](pipeline/sources.py) | Discovery from the news sitemap, headline filter, state file |
