@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       max_articles:
-        description: 'Process at most this many articles (empty = all). The rest are picked up by the next run.'
+        description: 'Process at most this many deal candidates (empty = all). The rest are picked up by the next run.'
         required: false
         default: ''
 
@@ -28,9 +28,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: |
-          pip install .
-          python -m playwright install --with-deps chromium
+        run: pip install .
 
       - name: Run the pipeline
         run: python orchestrator.py
@@ -41,6 +39,7 @@ jobs:
           port: ${{ secrets.DB_PORT }}
           dbname: ${{ secrets.DB_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           MAX_ARTICLES: ${{ inputs.max_articles }}
           # Optional: send traces to a collector
           OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}

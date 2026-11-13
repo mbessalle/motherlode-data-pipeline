@@ -36,8 +36,21 @@ The loop is the interesting part: when the validator cannot find a value in the 
 **one corrected retry** that names the unsupported values. If they are still unsupported, those values are
 withheld from the database and appended to a review queue, while the supported values are still written.
 
-A run ([`pipeline/run.py`](pipeline/run.py)) fetches today's deal-tagged articles, keeps the ones newer than the
-last processed id, classifies each to a region table with a small model, and sends it through the graph.
+Before the graph, a run ([`pipeline/run.py`](pipeline/run.py)) has to find the announcements:
+
+1. **Discover.** Read the news sitemap the listing site publishes for automated readers
+   ([`pipeline/sources.py`](pipeline/sources.py)): headline, date and company per item. Its JSON API is
+   disallowed by its `robots.txt`, so the pipeline does not use it.
+2. **Filter.** Keep headlines that look like a transaction. This costs nothing and is deliberately generous.
+3. **Find the announcement.** One web search per headline ([`pipeline/search.py`](pipeline/search.py)). A result
+   is accepted on evidence in the page, not on its rank: it must name the company, carry the headline's names
+   and numbers, and be dated within two weeks of the listing.
+4. **Triage.** A small model decides whether it is a project transaction and names the project; code then
+   requires that name to be written in the announcement.
+5. **Classify** the region table, then run the graph above.
+
+On one day's feed (226 items): 21 deal-like headlines, an announcement accepted for 12, of which 7 were extracted
+with every number supported, 3 were screened out as not project deals and 2 failed the project-name check.
 
 ## How a value is checked
 
@@ -54,7 +67,8 @@ Details that turned out to matter on real announcements, each pinned by a test:
 
 - `2,000,000`, `2 million`, `$2M` and `2.0%`, `two percent`, `seventy-five percent` are the same number.
 - A year is not an amount: bare numbers only count with a thousands separator, a currency sign or a unit.
-- A sum never mixes dollars with share counts, and reuses an amount only if the article writes it twice.
+- Units count: "500,000 shares" is not evidence for a 500,000 cash payment, and a sum never mixes dollars with
+  share counts or reuses an amount the article writes once.
 - A derived value is accepted only when its inputs are themselves supported.
 - Currency codes, dates, percentage and coordinate ranges are checked; a malformed record is not written at all.
 
@@ -127,11 +141,10 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 44 tests, offline: no API key, database or browser needed
+pytest                      # 51 tests, offline: no API key, database or network needed
 ruff check .
 
-cp .env.example .env        # database + OpenAI settings
-python -m playwright install chromium
+cp .env.example .env        # database, OpenAI and search settings
 python orchestrator.py      # one run
 
 python -m evals.run_eval fetch                                  # download the eval articles (not committed)
@@ -141,7 +154,20 @@ python -m evals.run_eval score --model gpt-6.1-terra --retry    # about 0.30 USD
 Scheduled runs use [`.github/workflows/main.yml`](.github/workflows/main.yml); lint and tests run on every push
 in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Each run writes `run_report.json` (per article: table,
 outcome, extraction, validation report, withheld values) and uploads it with the review queue as an artifact.
-A manual run takes `max_articles` to process only a few; the rest are picked up by the next run.
+A manual run takes `max_articles` to process only a few deal candidates; the rest are picked up by the next run.
+
+Every step prints one line as it happens, so a run can be followed live in the log. From a real run:
+
+```
+[pipeline] 16378915 | headline  | Fuse Options Foggy Mountain Copper-Gold Project in BC [fuse battery metals inc]
+[pipeline] 16378915 | search    | ACCEPT https://ca.finance.yahoo.com/... (3 of 3 headline names and numbers)
+[pipeline] 16378915 | triage    | project deal; project 'Foggy Mountain'; Fuse entered into an option agreement to acquire up to an 80% interest in the Foggy Mountain property.
+[pipeline] 16378915 | region    | North America -> table north_america (new)
+[pipeline] 16378915 | extract   | attempt 1: 21 fields filled
+[pipeline] 16378915 | validate  | 6 of 6 numbers supported
+[pipeline] 16378915 | store     | insert into north_america: 23 fields
+[pipeline] 16378915 | RESULT    | inserted; project 'Foggy Mountain'
+```
 
 ## Layout
 
@@ -151,11 +177,12 @@ A manual run takes `max_articles` to process only a few; the rest are picked up 
 | [`pipeline/validate.py`](pipeline/validate.py) | Deterministic grounding, derivation and schema checks |
 | [`pipeline/llm.py`](pipeline/llm.py), [`pipeline/prompts.py`](pipeline/prompts.py) | The two model calls, traced; prompts kept as they ran in production |
 | [`pipeline/store.py`](pipeline/store.py) | Postgres writes, an in-memory twin for tests, the review queue |
-| [`pipeline/sources.py`](pipeline/sources.py) | Article listing, pagination, state file, page scraping |
+| [`pipeline/sources.py`](pipeline/sources.py) | Discovery from the news sitemap, headline filter, state file |
+| [`pipeline/search.py`](pipeline/search.py) | Web search for the announcement and the identity test a result must pass |
 | [`pipeline/telemetry.py`](pipeline/telemetry.py) | OpenTelemetry setup |
 | [`evals/`](evals/) | Eval cases, runner and results |
 | [`tools/integrity_checks.sql`](tools/integrity_checks.sql) | Read-only checks for the tables themselves |
-| [`tests/`](tests/) | Validator rules, every exit of the graph, the run end to end |
+| [`tests/`](tests/) | Validator rules, every exit of the graph, the search identity test, the run end to end |
 
 ## Design decisions
 
@@ -175,4 +202,8 @@ A manual run takes `max_articles` to process only a few; the rest are picked up 
 - A press release found by search is not always the document the source listing served; cases whose source
   could not be confirmed as the right, complete release were left out of the eval (7 of 40 sampled).
 - Share price is rarely stated in an announcement, so it is usually empty here and filled by analysts elsewhere.
-- The article listing is a third-party site without a public API contract; a change there stops new articles.
+- Finding the announcement is the weakest step: on one day's feed, 9 of 21 deal-like headlines ended with no
+  accepted source. The identity test prefers missing a deal to writing the wrong one.
+- The listing gives only a headline, a date and a company, and its headlines are its own wording, so the
+  project name comes from the model and is checked against the announcement.
+- Discovery depends on one third-party sitemap; a change there stops new articles, and the run fails loudly.

@@ -1,56 +1,59 @@
-"""Where articles come from: the MiningHub listing for today's deal news, and the article page itself."""
+"""Discovery: which announcements are new.
+
+The list comes from MiningHub's published news sitemap, the feed the site offers to automated readers
+(its robots.txt advertises it and disallows the JSON API this pipeline used before). The sitemap gives a
+headline, a date and the company; the announcement itself is then found by web search (pipeline/search.py).
+"""
 from __future__ import annotations
 
-import time
-from datetime import UTC, datetime, timedelta
+import re
+import xml.etree.ElementTree as ET
 
 import requests
 
-API_URL = "https://mininghub.com/api/articles"
-DEAL_TAGS = ["Mergers & Acquisitions", "Joint Venture", "Project Acquisition", "Strategic Investment"]
-HEADERS = {
-    "accept": "*/*", "content-type": "application/json",
-    "origin": "https://mininghub.com", "referer": "https://mininghub.com/articles",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-}
+NEWS_SITEMAP_URL = "https://mininghub.com/news.xml"
+USER_AGENT = "motherlode-data-pipeline (+https://github.com/mbessalle/motherlode-data-pipeline)"
+_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9", "news": "http://www.google.com/schemas/sitemap-news/0.9"}
+_LINK = re.compile(r"/company/(?P<company>[^/]+)/[^/]+/(?P<slug>.+)-(?P<id>\d+)$")
+
+# Headline words that suggest a project-level transaction. Deliberately generous: this only decides
+# which headlines are worth a search; the model decides afterwards on the announcement itself.
+DEAL_WORDS = re.compile(
+    r"acqui|divest|\bsells?\b|\bsale\b|\bsold\b|purchas|\boption|earn[- ]in|joint venture|\bjv\b|farm[- ]?in|farm[- ]?out|"
+    r"merger|\bmerge|takeover|arrangement|consolidat|\bstake\b|\binterest in\b|agreement to", re.I)
 
 
-def listing_payload(now: datetime) -> dict:
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    stamp = lambda d: d.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"  # noqa: E731
-    return {
-        "lastIds": {}, "commodities": {"data": [], "options": {"anyAll": "any"}},
-        "daterange": {"startDate": stamp(start), "endDate": stamp(now), "timezoneOffset": -120, "option": "custom"},
-        "deposits": {"data": [], "options": {"anyAll": "any"}}, "marketcap": [None, None],
-        "nsr": {"data": ["Any"]}, "outstandingShares": [None, None], "stages": {"data": []},
-        "tags": {"data": DEAL_TAGS, "options": {"anyAll": "any"}},
-    }
+def parse_news_sitemap(xml_text: str) -> list[dict]:
+    """Sitemap entries as articles, newest first."""
+    articles = []
+    for url in ET.fromstring(xml_text).findall("sm:url", _NS):
+        link = (url.findtext("sm:loc", default="", namespaces=_NS) or "").strip()
+        match = _LINK.search(link)
+        if not match:
+            continue
+        articles.append({
+            "id": int(match.group("id")),
+            "title": (url.findtext("news:news/news:title", default="", namespaces=_NS) or "").strip(),
+            "date": (url.findtext("news:news/news:publication_date", default="", namespaces=_NS) or "").strip(),
+            "listing_link": link,
+            "company": match.group("company").replace("-", " ").strip(),
+        })
+    return sorted(articles, key=lambda a: (a["date"], a["id"]), reverse=True)
 
 
-def fetch_todays_articles(post=requests.post, now: datetime | None = None, max_pages: int = 3, pause: float = 1.0) -> list[dict]:
-    """Today's deal-tagged articles, newest first. Later pages are requested by moving the end of the
-    date range to just before the oldest article already seen."""
-    payload = listing_payload(now or datetime.now(UTC))
-    articles: list[dict] = []
-    seen: set = set()
-    for _ in range(max_pages):
-        response = post(API_URL, headers=HEADERS, json=payload, timeout=30)
-        response.raise_for_status()
-        page = response.json().get("data", [])
-        if not page:
-            break
-        for article in page:
-            if article["id"] not in seen:
-                seen.add(article["id"])
-                articles.append(article)
-        oldest = datetime.fromisoformat(page[-1]["date"].replace("Z", "+00:00"))
-        payload["daterange"]["endDate"] = (oldest - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        time.sleep(pause)
-    return articles
+def fetch_news(get=requests.get) -> list[dict]:
+    response = get(NEWS_SITEMAP_URL, headers={"User-Agent": USER_AGENT}, timeout=30)
+    response.raise_for_status()
+    return parse_news_sitemap(response.text)
+
+
+def looks_like_a_deal(title: str) -> bool:
+    return bool(DEAL_WORDS.search(title or ""))
 
 
 def new_since(articles_newest_first: list[dict], last_processed_id: str) -> list[dict]:
-    """Articles published after the last processed one, returned oldest first so they are handled in order."""
+    """Articles published after the last processed one, returned oldest first so they are handled in order.
+    If that article has dropped out of the feed, everything in the feed counts as new."""
     fresh = []
     for article in articles_newest_first:
         if str(article["id"]) == last_processed_id:
@@ -70,32 +73,3 @@ def read_state(path: str) -> str:
 def write_state(path: str, article_id: str) -> None:
     with open(path, "w") as f:
         f.write(str(article_id))
-
-
-class Scraper:
-    """Reads an article page with a headless browser. One browser is shared across the run."""
-
-    def __enter__(self):
-        from playwright.sync_api import sync_playwright
-
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=True)
-        return self
-
-    def __exit__(self, *exc):
-        self._browser.close()
-        self._playwright.stop()
-
-    def __call__(self, url: str) -> str | None:
-        page = self._browser.new_page()
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            for selector in ("article", "main"):
-                target = page.locator(selector).first
-                if target.count() and target.is_visible():
-                    return " ".join(target.inner_text().split())
-            return " ".join(page.locator("body").inner_text().split())
-        except Exception:
-            return None
-        finally:
-            page.close()

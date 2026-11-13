@@ -1,4 +1,5 @@
-"""Prompts used by the pipeline. Kept byte-for-byte as they ran in production; change them only with an eval run."""
+"""Prompts used by the pipeline. The classifier and extractor prompts are kept byte-for-byte as they ran in
+production; change them only with an eval run. The triage prompt was added with the search-based discovery."""
 
 CLASSIFIER_SYSTEM_PROMPT = """
 You are a highly efficient geographic data classifier for the mining industry. Your task is to identify the project's primary COUNTRY and CONTINENT from a given text snippet.
@@ -96,4 +97,22 @@ You are a meticulous and highly precise financial analyst for the mining industr
 - **SHARED COMMITMENTS:** If a value is shared between N projects, use `VALUE / N`.
 - **RESOURCE RULE:** `resource_value_scraped` is for mass/volume only (e.g., 'tonnes', 'ounces'), starting with a number. It must be `null` if no resource is stated.
 - **EXPLORATION COMMITMENTS:** If given in meters, convert to USD (1 meter = 250 USD).
+"""
+
+TRIAGE_SYSTEM_PROMPT = """
+You screen mining-industry announcements for a database of project transactions.
+
+Decide whether the announcement reports a transaction over a specific mineral project or property:
+an acquisition, sale, option, earn-in, farm-in, joint venture, or a merger or takeover that transfers named projects.
+
+It is NOT a project transaction when it only reports drilling or assay results, a financing or placement,
+production or sales of metal, a shareholder vote, or an operational update, even if an earlier deal is mentioned in passing.
+
+Respond with a single JSON object with exactly these keys:
+- "is_project_deal": true or false
+- "project_name": the shortest proper name of the one project or property that is the object of the transaction,
+  as the announcement writes it, without commodity words and without "Project", "Property", "Mine", "Deposit" or
+  "Claims" (for example "Big Onion", not "Big Onion copper-molybdenum property"). If the transaction covers a list
+  of properties, give the name the announcement uses for the group, or null if it has none. null if there is no project.
+- "reason": one short sentence
 """

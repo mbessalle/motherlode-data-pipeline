@@ -48,6 +48,12 @@ def span(name: str, **attributes):
         yield s
 
 
+def progress(article_id, step: str, detail: str = "") -> None:
+    """One line per step, printed as it happens, so a run can be followed live in the log.
+    Traces answer "why" afterwards; this answers "what is it doing right now"."""
+    print(f"[pipeline] {article_id} | {step:<9} | {detail}", flush=True)
+
+
 def shutdown() -> None:
     """Flush and stop exporting. Call once at the end of a run."""
     if _provider is not None:

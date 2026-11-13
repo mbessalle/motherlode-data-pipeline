@@ -2,9 +2,10 @@
 import json
 
 from . import telemetry
-from .prompts import CLASSIFIER_SYSTEM_PROMPT, EXTRACTOR_SYSTEM_PROMPT
+from .prompts import CLASSIFIER_SYSTEM_PROMPT, EXTRACTOR_SYSTEM_PROMPT, TRIAGE_SYSTEM_PROMPT
 
 ARTICLE_CHAR_LIMIT = 15000
+TRIAGE_CHAR_LIMIT = 4000
 
 
 def _chat_json(client, model: str, system: str, user: str, operation: str) -> dict:
@@ -38,6 +39,15 @@ def classify_location(client, model: str, context: str) -> dict:
         return {"country": None, "continent": None}
     data = _chat_json(client, model, CLASSIFIER_SYSTEM_PROMPT, context, "classify_location")
     return {"country": data.get("country"), "continent": data.get("continent")}
+
+
+def triage(client, model: str, title: str, company: str, announcement_text: str) -> dict:
+    """Is this announcement a project transaction, and which project? A failed call counts as "no"."""
+    user = f"Headline: {title}\nCompany: {company}\nAnnouncement (start):\n---\n{announcement_text[:TRIAGE_CHAR_LIMIT]}\n---"
+    data = _chat_json(client, model, TRIAGE_SYSTEM_PROMPT, user, "triage")
+    name = data.get("project_name")
+    return {"is_project_deal": data.get("is_project_deal") is True, "project_name": name.strip() if isinstance(name, str) and name.strip() else None,
+            "reason": data.get("reason")}
 
 
 def build_extraction_prompt(article_text: str, project_record: dict | None, feedback: str | None = None) -> str:

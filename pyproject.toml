@@ -8,10 +8,11 @@ dependencies = [
     "openai>=3,<4",
     "opentelemetry-sdk>=1.45,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.45,<2",
-    "playwright>=1.60",
+    "pypdf>=7",
     "psycopg2-binary>=2.9",
     "python-dotenv>=1.0",
     "requests>=2.32",
+    "trafilatura>=2.3",
 ]
 
 [project.optional-dependencies]

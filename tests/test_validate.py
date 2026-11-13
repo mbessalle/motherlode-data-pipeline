@@ -127,3 +127,14 @@ def test_shares_value_from_a_price_the_article_states():
     assert report.fields["shares_value"].status == DERIVED and "0.1278" in report.fields["shares_value"].evidence
     # a value that needs a price nobody wrote stays unsupported
     assert validate({"shares_amount": 14195506, "shares_value": 5000000}, text).fields["shares_value"].status == NOT_FOUND
+
+
+def test_a_share_count_is_not_evidence_for_a_cash_payment():
+    text = ("Consideration is 2,000,000 common shares issuable in four tranches of 500,000 shares each, "
+            "plus a cash payment of $150,000 on closing.")
+    report = validate({"cash_payments_value": 500000, "exp_comit_value": 2000000, "shares_amount": 2000000}, text)
+    assert report.fields["cash_payments_value"].status == NOT_FOUND     # 500,000 is only written as shares
+    assert report.fields["exp_comit_value"].status == NOT_FOUND         # 2,000,000 is only written as shares
+    assert report.fields["shares_amount"].status == FOUND
+    assert validate({"cash_payments_value": 150000}, text).fields["cash_payments_value"].status == FOUND
+    assert validate({"shares_amount": 150000}, text).fields["shares_amount"].status == NOT_FOUND   # $150,000 is money
