@@ -31,6 +31,9 @@ flowchart LR
     Q -->|malformed record| X
 ```
 
+The diagram above is drawn for reading. The exact graph, generated from the compiled code, is in
+[`docs/graph.md`](docs/graph.md) (`python -m tools.draw_graph`); a test fails if the two drift apart.
+
 It is a graph and not a script because an article can leave the path at four points and loop at one.
 The loop is the interesting part: when the validator cannot find a value in the article, the model gets
 **one corrected retry** that names the unsupported values. If they are still unsupported, those values are
@@ -141,7 +144,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 51 tests, offline: no API key, database or network needed
+pytest                      # 54 tests, offline: no API key, database or network needed
 ruff check .
 
 cp .env.example .env        # database, OpenAI and search settings

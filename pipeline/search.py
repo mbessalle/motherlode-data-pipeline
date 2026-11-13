@@ -80,6 +80,25 @@ def dated_near(text: str, listed: str) -> bool:
     return False
 
 
+def release_date(text: str, listed: str, model_date) -> str | None:
+    """The date to store for an announcement.
+
+    The model's date is used only when it is a real date, lies within the window around the listing date and is
+    written in the announcement. Otherwise the listing date is used. A date is never picked from the text by
+    position: releases routinely open by citing earlier releases ("further to its news releases dated ...")."""
+    listed_day = listed.split("T")[0] if listed else None
+    try:
+        claimed = date.fromisoformat(str(model_date))
+        window_start = date.fromisoformat(listed_day) - timedelta(days=DAYS_BEFORE) if listed_day else None
+        window_end = date.fromisoformat(listed_day) + timedelta(days=DAYS_AFTER) if listed_day else None
+    except (TypeError, ValueError):
+        return listed_day
+    if window_start and not window_start <= claimed <= window_end:
+        return listed_day
+    written = any(re.search(r"(?<!\d)" + spelling + r"(?!\d)", text or "", re.I) for spelling in date_spellings(claimed))
+    return claimed.isoformat() if written else listed_day
+
+
 def is_the_announcement(text: str, title: str, company: str, listed: str = "", min_share: float = 0.7) -> tuple[bool, str]:
     if not text or len(text) < MIN_CHARS:
         return False, "too short"

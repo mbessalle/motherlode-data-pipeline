@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 
 from pipeline import sources
-from pipeline.search import Searcher, company_words, dated_near, distinctive_words, is_the_announcement
+from pipeline.search import Searcher, company_words, dated_near, distinctive_words, is_the_announcement, release_date
 
 RELEASE = ("VANCOUVER, BC, Nov. 10, 2026 /CNW/ - Fuse Battery Metals Inc. is pleased to announce it has entered into an "
            "option agreement to acquire up to an 80% interest in the Foggy Mountain copper-gold-silver project in British "
@@ -81,3 +81,15 @@ def test_searcher_reads_results_in_order_and_reports_what_it_tried():
     assert source.url == "https://newswire.test/fuse" and "Foggy Mountain" in source.text and searcher.searches == 1
     assert [t["url"] for t in tried] == ["https://blog.test/other", "https://newswire.test/fuse"]
     assert "company not named" in tried[0]["verdict"]
+
+
+def test_release_date_trusts_the_model_only_when_the_announcement_writes_that_date():
+    listed = "2026-11-11T02:00:00.000Z"
+    assert release_date("VANCOUVER, Nov. 10, 2026 /CNW/ - text", listed, "2026-11-10") == "2026-11-10"
+    assert release_date("no date in this text", listed, "2026-11-10") == "2026-11-11"            # not written: listing date
+    assert release_date("dated June 1, 2026", listed, "2026-06-01") == "2026-11-11"              # outside the window
+    assert release_date("text", listed, None) == "2026-11-11" and release_date("text", listed, "soon") == "2026-11-11"
+    # a release that opens by citing earlier releases: no date is picked from the text by position
+    cites = "further to its news releases dated September 21, 2026 and November 2, 2026 it has closed the sale"
+    assert release_date(cites, listed, None) == "2026-11-11"
+    assert release_date("Nov. 10, 2026", "", "2026-11-10") == "2026-11-10" and release_date("text", "", None) is None

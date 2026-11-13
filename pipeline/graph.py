@@ -20,6 +20,7 @@ from langgraph.graph import END, START, StateGraph
 
 from . import telemetry
 from .config import FALLBACK_TABLE
+from .search import release_date
 from .validate import validate
 
 
@@ -106,8 +107,8 @@ def build_graph(deps: Deps):
         row = dict(state["extraction"])
         row["news_link"] = article["link"]
         row["news_title"] = article.get("title")
-        if article.get("date"):
-            row["news_date"] = article["date"].split("T")[0]
+        # The listing date can trail the release by days; keep the model's date only if the announcement writes it.
+        row["news_date"] = release_date(state.get("text", ""), article.get("date") or "", row.get("news_date"))
         suffix = "_partial" if state.get("withheld") else ""
         with telemetry.span("store", **{"db.collection.name": state["table"], "pipeline.store.mode": state["status"]}) as s:
             try:
