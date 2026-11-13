@@ -89,7 +89,7 @@ def test_still_unsupported_after_retry_is_withheld_and_queued(harness):
     final = harness.run(article())
     assert final["outcome"] == "inserted_partial" and final["attempts"] == 2
     row = harness.store.tables["north_america"][0]
-    assert row["shares_amount"] is None and row["cash_payments_value"] == 100000
+    assert row.get("shares_amount") is None and row["cash_payments_value"] == 100000   # withheld, so not written
     queued = harness.queued()
     assert len(queued) == 1 and queued[0]["withheld_values"] == {"shares_amount": 9999999}
 

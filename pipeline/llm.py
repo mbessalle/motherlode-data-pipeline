@@ -1,8 +1,11 @@
 """The two LLM calls (classify location, extract deal terms), traced with GenAI semantic-convention attributes."""
 import json
 
+from pydantic import ValidationError
+
 from . import telemetry
 from .prompts import CLASSIFIER_SYSTEM_PROMPT, EXTRACTOR_SYSTEM_PROMPT, TRIAGE_SYSTEM_PROMPT
+from .schema import TriageVerdict
 
 ARTICLE_CHAR_LIMIT = 15000
 TRIAGE_CHAR_LIMIT = 4000
@@ -45,9 +48,10 @@ def triage(client, model: str, title: str, company: str, announcement_text: str)
     """Is this announcement a project transaction, and which project? A failed call counts as "no"."""
     user = f"Headline: {title}\nCompany: {company}\nAnnouncement (start):\n---\n{announcement_text[:TRIAGE_CHAR_LIMIT]}\n---"
     data = _chat_json(client, model, TRIAGE_SYSTEM_PROMPT, user, "triage")
-    name = data.get("project_name")
-    return {"is_project_deal": data.get("is_project_deal") is True, "project_name": name.strip() if isinstance(name, str) and name.strip() else None,
-            "reason": data.get("reason")}
+    try:
+        return TriageVerdict.model_validate(data).model_dump()
+    except ValidationError:   # a reply that is not the agreed shape counts as "no"
+        return TriageVerdict().model_dump()
 
 
 def build_extraction_prompt(article_text: str, project_record: dict | None, feedback: str | None = None) -> str:

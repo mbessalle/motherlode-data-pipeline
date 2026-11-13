@@ -15,7 +15,8 @@ from __future__ import annotations
 import itertools
 import re
 from dataclasses import dataclass, field
-from datetime import date
+
+from . import schema
 
 FOUND, DERIVED, NOT_FOUND, EMPTY = "FOUND", "DERIVED", "NOT_FOUND", "EMPTY"
 
@@ -24,7 +25,6 @@ PERCENT_FIELDS = ("nsr_percent", "interest_acquired_percent")
 PLAIN_FIELDS = ("shares_amount", "share_price", "project_area", "drilling_amount")
 CHECKED_FIELDS = MONEY_FIELDS + ("shares_amount", "share_price", "shares_value", "aggregate_deal_value") + PERCENT_FIELDS + (
     "project_area", "drilling_amount")
-CURRENCY_FIELDS = ("aggregate_deal_currency", "cash_payments_currency", "exp_comit_currency", "shares_currency")
 _ONES = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen",
          "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
 _TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
@@ -202,34 +202,10 @@ class Report:
         }
 
 
-def check_schema(extraction: dict) -> list[str]:
-    issues = []
-    for name in CHECKED_FIELDS + ("longitude", "latitude", "owner_marketcap", "drilling_value", "shares_value_scraped"):
-        value = extraction.get(name)
-        if value not in (None, "") and to_number(value) is None:
-            issues.append(f"{name} must be a number or null, got {value!r}")
-    for name in CURRENCY_FIELDS:
-        value = extraction.get(name)
-        if value not in (None, "") and not re.fullmatch(r"[A-Z]{3}", str(value)):
-            issues.append(f"{name} must be a 3-letter ISO code, got {value!r}")
-    news_date = extraction.get("news_date")
-    if news_date not in (None, ""):
-        try:
-            date.fromisoformat(str(news_date))
-        except ValueError:
-            issues.append(f"news_date must be YYYY-MM-DD, got {news_date!r}")
-    for name, low, high in (("nsr_percent", 0, 100), ("interest_acquired_percent", 0, 100),
-                            ("latitude", -90, 90), ("longitude", -180, 180)):
-        x = to_number(extraction.get(name))
-        if x is not None and not low <= x <= high:
-            issues.append(f"{name} out of range: {x:g}")
-    return issues
-
-
 def validate(extraction: dict, article_text: str) -> Report:
     text = article_text.replace("\xa0", " ").replace("’", "'")
     money_amounts, share_amounts = written_amounts(text, exclude=SHARES), written_amounts(text, exclude=MONEY)
-    report = Report(schema_issues=check_schema(extraction))
+    report = Report(schema_issues=schema.issues(extraction))
     values = {name: to_number(extraction.get(name)) for name in CHECKED_FIELDS}
 
     for name in CHECKED_FIELDS:

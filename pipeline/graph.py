@@ -18,7 +18,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from . import telemetry
+from . import schema, telemetry
 from .config import FALLBACK_TABLE
 from .search import release_date
 from .validate import validate
@@ -104,7 +104,7 @@ def build_graph(deps: Deps):
 
     def store(state: ArticleState) -> dict:
         article = state["article"]
-        row = dict(state["extraction"])
+        row = schema.normalise(state["extraction"])   # typed values, known columns only
         row["news_link"] = article["link"]
         row["news_title"] = article.get("title")
         # The listing date can trail the release by days; keep the model's date only if the announcement writes it.
@@ -113,7 +113,7 @@ def build_graph(deps: Deps):
         with telemetry.span("store", **{"db.collection.name": state["table"], "pipeline.store.mode": state["status"]}) as s:
             try:
                 if state["status"] == "new":
-                    deps.store.insert(state["table"], {"project_name": article["project_name"], **row})
+                    deps.store.insert(state["table"], {**row, "project_name": article["project_name"]})
                 else:
                     deps.store.update(state["table"], article["project_name"], row)
                 written = sum(1 for value in row.values() if value not in (None, ""))
