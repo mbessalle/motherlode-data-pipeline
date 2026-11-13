@@ -73,6 +73,9 @@ def build_graph(deps: Deps):
         attempts = state.get("attempts", 0) + 1
         with telemetry.span("extract", **{"pipeline.extract.attempt": attempts, "pipeline.extract.is_retry": attempts > 1}):
             extraction = deps.extract(state["text"], state["record"], state.get("feedback"))
+        filled = sum(1 for value in extraction.values() if value not in (None, ""))
+        telemetry.progress(state["article"].get("id"), "extract", f"attempt {attempts}: {filled} fields filled"
+                           + (" (retry with feedback)" if attempts > 1 else ""))
         return {"extraction": extraction, "attempts": attempts} if extraction else {"attempts": attempts, "outcome": "no_data"}
 
     def check(state: ArticleState) -> dict:
@@ -82,6 +85,9 @@ def build_graph(deps: Deps):
             s.set_attribute("pipeline.validate.grounded", report.grounded)
             s.set_attribute("pipeline.validate.not_found", ",".join(report.not_found))
             s.set_attribute("pipeline.validate.passed", report.passed)
+        telemetry.progress(state["article"].get("id"), "validate", f"{report.grounded} of {report.checked} numbers supported"
+                           + (f"; NOT supported: {', '.join(report.not_found)}" if report.not_found else "")
+                           + (f"; schema: {'; '.join(report.schema_issues)}" if report.schema_issues else ""))
         return {"report": report.as_dict(), "feedback": report.feedback()}
 
     def quarantine(state: ArticleState) -> dict:
@@ -107,9 +113,12 @@ def build_graph(deps: Deps):
             try:
                 if state["status"] == "new":
                     deps.store.insert(state["table"], {"project_name": article["project_name"], **row})
-                    return {"outcome": "inserted" + suffix}
-                deps.store.update(state["table"], article["project_name"], row)
-                return {"outcome": "updated" + suffix}
+                else:
+                    deps.store.update(state["table"], article["project_name"], row)
+                written = sum(1 for value in row.values() if value not in (None, ""))
+                telemetry.progress(article.get("id"), "store", f"{'insert into' if state['status'] == 'new' else 'update'} "
+                                   f"{state['table']}: {written} fields")
+                return {"outcome": ("inserted" if state["status"] == "new" else "updated") + suffix}
             except Exception as error:
                 s.record_exception(error)
                 return {"outcome": "db_error"}

@@ -60,8 +60,28 @@ def _forms(x: float) -> set[str]:
     return {s, f"{int(s):,}"}
 
 
-def find_number(text: str, x: float, percent: bool = False) -> str | None:
-    """Return the surrounding snippet if `x` is written in `text`, else None."""
+MONEY, SHARES, OTHER = "money", "shares", "other"
+FIELD_KIND = {"cash_payments_value": MONEY, "exp_comit_value": MONEY, "shares_value": MONEY, "aggregate_deal_value": MONEY,
+              "shares_amount": SHARES}
+_CURRENCY_BEFORE = re.compile(r"(?:[A-Z]{0,2}\$|\b(?:CAD|USD|AUD|EUR|GBP|NZD))\s?$")
+_MONEY_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:dollars|in cash)\b", re.I)
+_SHARES_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:[a-z-]+\s){0,3}(?:shares|units|warrants)\b", re.I)
+
+
+def occurrence_kind(text: str, start: int, end: int) -> str:
+    """What a number at text[start:end] counts: money, a share count, or neither."""
+    if _CURRENCY_BEFORE.search(text[max(0, start - 5):start]) or _MONEY_AFTER.match(text[end:end + 30]):
+        return MONEY
+    if _SHARES_AFTER.match(text[end:end + 50]):
+        return SHARES
+    return OTHER
+
+
+def find_number(text: str, x: float, percent: bool = False, kind: str | None = None) -> str | None:
+    """Return the surrounding snippet if `x` is written in `text`, else None.
+
+    With `kind`, an occurrence of the other kind does not count: 500,000 written as "500,000 shares"
+    is not evidence for a 500,000 cash payment, and "$500,000" is not evidence for a share count."""
     patterns = []
     for form in _forms(x):
         tail = r"\s*(?:%|per\s?cent|percent)" if percent else r"(?![\d]|[.,]\d)"
@@ -72,15 +92,16 @@ def find_number(text: str, x: float, percent: bool = False) -> str | None:
     if not percent and x >= 1e5:  # "2 million", "$1.5M", "250K"
         patterns += [r"(?<![\d.,])" + re.escape(f) + r"\s*(?:million|mm\b|m\b)" for f in _forms(x / 1e6)]
         patterns += [r"(?<![\d.,])" + re.escape(f) + r"\s*(?:thousand|k\b)" for f in _forms(x / 1e3)]
+    other = {MONEY: SHARES, SHARES: MONEY}.get(kind)
     for pattern in patterns:
-        match = re.search(pattern, text, re.I)
-        if match:
+        for match in re.finditer(pattern, text, re.I):
+            if other and occurrence_kind(text, match.start(), match.end()) == other:
+                continue
             start, end = max(0, match.start() - 90), min(len(text), match.end() + 90)
             return re.sub(r"\s+", " ", text[start:end]).strip()
     return None
 
 
-MONEY, SHARES, OTHER = "money", "shares", "other"
 _AMOUNT = re.compile(
     r"(?P<cur>(?:[A-Z]{0,2}\$|\b(?:CAD|USD|AUD|EUR|GBP|NZD)\b)\s?)?(?<![\d.,])(?P<num>\d{1,3}(?:,\d{3})+|\d+)(?P<frac>\.\d+)?"
     r"\s*(?P<unit>million|thousand|m\b|k\b)?(?=(?P<after>[^.;\n|]{0,40}))", re.I)
@@ -101,19 +122,13 @@ def written_amounts(text: str, exclude: str | None = None) -> list[float]:
         value *= 1e6 if unit in ("million", "m") else 1e3 if unit in ("thousand", "k") else 1
         if value < 1000:
             continue
-        after = m.group("after").lower()
-        if m.group("cur") or re.match(r"\s*(dollars|in cash)", after):
-            kind = MONEY
-        elif re.match(r"\s*(?:[a-z-]+\s){0,3}(?:shares|units|warrants)\b", after):
-            kind = SHARES
-        else:
-            kind = OTHER
+        kind = MONEY if m.group("cur") else occurrence_kind(text, m.start("num"), m.end())
         if kind != exclude:
             out.append(value)
     return sorted(out)
 
 
-def explain_by_rules(x: float, amounts: list[float], text: str) -> str | None:
+def explain_by_rules(x: float, amounts: list[float], text: str, kind: str | None = None) -> str | None:
     """A sum of up to three written amounts, or a written total (or two-term sum) split across 2-6 projects.
     An amount is used twice only if it is written twice. This is a plausibility test, not a proof."""
 
@@ -133,7 +148,7 @@ def explain_by_rules(x: float, amounts: list[float], text: str) -> str | None:
         if total < 10000 or abs(total - round(total)) > 0.01 * n:
             continue
         total = round(total)
-        if find_number(text, total):
+        if find_number(text, total, kind=kind):
             return f"{total:,.0f} split across {n} projects"
         summed = as_sum(total, 2)
         if summed:
@@ -222,7 +237,7 @@ def validate(extraction: dict, article_text: str) -> Report:
         if x is None or x == 0:
             report.fields[name] = FieldCheck(EMPTY)
             continue
-        snippet = find_number(text, x, percent=name in PERCENT_FIELDS)
+        snippet = find_number(text, x, percent=name in PERCENT_FIELDS, kind=FIELD_KIND.get(name))
         report.fields[name] = FieldCheck(FOUND, x, snippet) if snippet else FieldCheck(NOT_FOUND, x)
 
     def supported(name: str) -> bool:
@@ -236,7 +251,7 @@ def validate(extraction: dict, article_text: str) -> Report:
     for name in MONEY_FIELDS + ("shares_amount",):
         if report.fields[name].status == NOT_FOUND:
             amounts = share_amounts if name == "shares_amount" else money_amounts
-            derive(name, explain_by_rules(values[name], amounts, text))
+            derive(name, explain_by_rules(values[name], amounts, text, FIELD_KIND.get(name)))
 
     # Exploration commitments stated in metres are converted at a fixed rate.
     if report.fields["exp_comit_value"].status == NOT_FOUND:

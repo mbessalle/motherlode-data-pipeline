@@ -29,6 +29,7 @@ class Settings:
     review_queue_path: str
     max_articles: int = 0          # 0 = no limit; a small number makes a first or manual run easy to inspect
     run_report_path: str = "run_report.json"
+    serper_api_key: str | None = None
 
     @property
     def db_ready(self) -> bool:
@@ -50,4 +51,5 @@ def load() -> Settings:
         review_queue_path=os.getenv("REVIEW_QUEUE_PATH", "review_queue.jsonl"),
         max_articles=int(os.getenv("MAX_ARTICLES") or 0),
         run_report_path=os.getenv("RUN_REPORT_PATH", "run_report.json"),
+        serper_api_key=os.getenv("SERPER_API_KEY"),
     )
