@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 */4 * * *'   # every 4 hours
   workflow_dispatch:
+    inputs:
+      max_articles:
+        description: 'Process at most this many articles (empty = all). The rest are picked up by the next run.'
+        required: false
+        default: ''
 
 concurrency:
   group: pipeline
@@ -36,16 +41,19 @@ jobs:
           port: ${{ secrets.DB_PORT }}
           dbname: ${{ secrets.DB_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MAX_ARTICLES: ${{ inputs.max_articles }}
           # Optional: send traces to a collector
           OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
 
-      - name: Keep the values withheld for review
+      - name: Keep the run report and the values withheld for review
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: review-queue
-          path: review_queue.jsonl
+          name: run-output
+          path: |
+            run_report.json
+            review_queue.jsonl
           if-no-files-found: ignore
 
       - name: Record the last processed article

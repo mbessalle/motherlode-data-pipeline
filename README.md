@@ -127,7 +127,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 43 tests, offline: no API key, database or browser needed
+pytest                      # 44 tests, offline: no API key, database or browser needed
 ruff check .
 
 cp .env.example .env        # database + OpenAI settings
@@ -139,7 +139,9 @@ python -m evals.run_eval score --model gpt-6.1-terra --retry    # about 0.30 USD
 ```
 
 Scheduled runs use [`.github/workflows/main.yml`](.github/workflows/main.yml); lint and tests run on every push
-in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Each run writes `run_report.json` (per article: table,
+outcome, extraction, validation report, withheld values) and uploads it with the review queue as an artifact.
+A manual run takes `max_articles` to process only a few; the rest are picked up by the next run.
 
 ## Layout
 
