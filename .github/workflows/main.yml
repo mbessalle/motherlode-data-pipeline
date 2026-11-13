@@ -1,51 +1,59 @@
-# .github/workflows/main.yml
 name: Mining News Pipeline
 
 on:
-  # Run automatically once a day at 8:00 AM UTC
   schedule:
-    - cron: '0 */4 * * *'
-  
-  # Allows you to run this workflow manually from the Actions tab
+    - cron: '0 */4 * * *'   # every 4 hours
   workflow_dispatch:
 
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
 jobs:
-  build-and-process:
+  run:
     runs-on: ubuntu-latest
-
-    # --- ADD THIS SECTION ---
-    # Grant the GITHUB_TOKEN write permissions to push to the repository
     permissions:
-      contents: write
-    # -----------------------
-
+      contents: write   # the run commits the id of the last processed article
     steps:
-      - name: Check out repository
-        # This is important so the orchestrator can commit back
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          cache: pip
 
-      - name: Install dependencies
+      - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Install Playwright Browsers
-        run: python -m playwright install --with-deps
+          pip install .
+          python -m playwright install --with-deps chromium
 
-      - name: Run the entire pipeline via Orchestrator
+      - name: Run the pipeline
         run: python orchestrator.py
         env:
-          # Pass all secrets to the environment, where the orchestrator
-          # and its child scripts can access them via os.getenv()
           user: ${{ secrets.DB_USER }}
           password: ${{ secrets.DB_PASSWORD }}
           host: ${{ secrets.DB_HOST }}
           port: ${{ secrets.DB_PORT }}
           dbname: ${{ secrets.DB_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          # Optional: send traces to a collector
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
 
+      - name: Keep the values withheld for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-queue
+          path: review_queue.jsonl
+          if-no-files-found: ignore
+
+      - name: Record the last processed article
+        run: |
+          if [ -n "$(git status --porcelain last_article_id.txt)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add last_article_id.txt
+            git commit -m "Record last processed article ($(date -u +'%Y-%m-%d %H:%M') UTC)"
+            git push
+          fi

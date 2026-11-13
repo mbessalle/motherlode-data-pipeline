@@ -20,3 +20,11 @@ output/
 # Operating System files
 .DS_Store
 Thumbs.db
+# Eval cache (downloaded article texts and model replies)
+evals/.cache/
+review_queue.jsonl
+last_run_articles.json
+
+# Build output
+build/
+*.egg-info/
