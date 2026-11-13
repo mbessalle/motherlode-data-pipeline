@@ -12,6 +12,7 @@ every step is traced.
 
 | | |
 |---|---|
+| **Relevance screening** | A free headline filter, then a small LLM decides "project deal or not" on the announcement itself, before the expensive model runs |
 | **LangGraph** | Per-article state machine with a validate → retry → quarantine loop |
 | **OpenTelemetry** | One trace per run, GenAI attributes (model, tokens) on every model call |
 | **Evals** | 33 real press releases: **98% of extracted numbers are supported by the source** |
@@ -49,7 +50,58 @@ Live runs: [Actions → Mining News Pipeline](https://github.com/mbessalle/mothe
 
 ## How it works
 
-Each article runs through a [LangGraph](https://github.com/langchain-ai/langgraph) state machine
+A run has two parts: **screening**, which decides which news items are worth the expensive model, and
+**extraction**, which reads the announcement and writes the deal. The numbers on the arrows are one real day's feed.
+
+```mermaid
+flowchart TD
+    F(["News feed<br/>226 items in one day"]) --> H{"Headline filter<br/>code, free"}
+    H -->|"no deal words: 205"| I(["ignored"])
+    H -->|"deal-like: 21"| S["Find the announcement<br/>web search + identity test"]
+    S -->|"no source accepted: 9"| X1(["source_not_found"])
+    S -->|"announcement found: 12"| T{{"Relevance check<br/>small LLM, gpt-6-luna<br/>project deal? which project?"}}
+    T -->|"not a project deal: 3"| X2(["not_a_project_deal"])
+    T -->|"project deal: 9"| N{"Project name written<br/>in the announcement?<br/>code"}
+    N -->|"no: 2"| X3(["project_name_not_in_source"])
+    N -->|"yes: 7"| C["Classify region<br/>small LLM, gpt-6-luna"]
+    C --> G[["Extraction graph, LangGraph<br/>extract with gpt-6.1-terra, validate,<br/>retry or quarantine, store"]]
+    G --> D[("Postgres")]
+
+    classDef llm fill:#5b4bdb,stroke:#2f2496,color:#ffffff
+    classDef stop fill:#f3f3f3,stroke:#999999,color:#333333
+    class T,C,G llm
+    class I,X1,X2,X3 stop
+```
+
+### Screening: is this news item a project deal?
+
+Most mining news is drilling results, financings and quarterly reports. Only transactions over a specific
+project belong in the database, so each item is screened in order of cost
+([`pipeline/run.py`](pipeline/run.py)):
+
+1. **Discover.** Read the news sitemap the listing site publishes for automated readers
+   ([`pipeline/sources.py`](pipeline/sources.py)): headline, date and company per item. Its JSON API is
+   disallowed by its `robots.txt`, so the pipeline does not use it.
+2. **Headline filter (code).** Keep headlines with deal words such as "acquire", "option", "earn-in" or "merger".
+   This costs nothing and is deliberately generous: it only decides what is worth a search.
+3. **Find the announcement.** One web search per headline ([`pipeline/search.py`](pipeline/search.py)). A result
+   is accepted on evidence in the page, not on its rank: it must name the company, carry the headline's names
+   and numbers, and be dated within two weeks of the listing.
+4. **Relevance check (small LLM).** `gpt-6-luna` reads the start of the announcement and answers two things: is
+   this a transaction over a specific project (acquisition, sale, option, earn-in, joint venture, or a merger
+   that transfers named projects), and which project. Drilling results, financings, production updates and
+   shareholder votes are rejected even if an earlier deal is mentioned. The reply must fit a Pydantic schema;
+   a failed or malformed reply counts as "no" ([`pipeline/llm.py`](pipeline/llm.py),
+   [`pipeline/prompts.py`](pipeline/prompts.py)).
+5. **Name check (code).** The project name the model gave must be written in the announcement.
+6. **Classify the region** with the same small model, which selects the table.
+
+Only what survives all six reaches the larger extraction model. The choice of a small chat model over a
+decision-model API for step 4 was [measured](#model-choice-is-measured).
+
+### Extraction: one LangGraph run per deal
+
+Each surviving article runs through a [LangGraph](https://github.com/langchain-ai/langgraph) state machine
 ([`pipeline/graph.py`](pipeline/graph.py)):
 
 ```mermaid
@@ -76,21 +128,8 @@ The loop is the interesting part: when the validator cannot find a value in the 
 **one corrected retry** that names the unsupported values. If they are still unsupported, those values are
 withheld from the database and appended to a review queue, while the supported values are still written.
 
-Before the graph, a run ([`pipeline/run.py`](pipeline/run.py)) has to find the announcements:
-
-1. **Discover.** Read the news sitemap the listing site publishes for automated readers
-   ([`pipeline/sources.py`](pipeline/sources.py)): headline, date and company per item. Its JSON API is
-   disallowed by its `robots.txt`, so the pipeline does not use it.
-2. **Filter.** Keep headlines that look like a transaction. This costs nothing and is deliberately generous.
-3. **Find the announcement.** One web search per headline ([`pipeline/search.py`](pipeline/search.py)). A result
-   is accepted on evidence in the page, not on its rank: it must name the company, carry the headline's names
-   and numbers, and be dated within two weeks of the listing.
-4. **Triage.** A small model decides whether it is a project transaction and names the project; code then
-   requires that name to be written in the announcement.
-5. **Classify** the region table, then run the graph above.
-
-On one day's feed (226 items): 21 deal-like headlines, an announcement accepted for 12, of which 7 were extracted
-with every number supported, 3 were screened out as not project deals and 2 failed the project-name check.
+Screening sits outside this graph on purpose: it is a straight line with early exits, so it is plain code,
+while extraction has a loop with state, which is what a graph is for.
 
 ## How a value is checked
 
@@ -197,7 +236,9 @@ written?" is answered from the trace. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to send 
 docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 python orchestrator.py
 # open http://localhost:16686 and pick the service "motherlode-data-pipeline"
-``` The spans are written by hand in
+```
+
+The spans are written by hand in
 [`pipeline/llm.py`](pipeline/llm.py) and [`pipeline/telemetry.py`](pipeline/telemetry.py) rather than by an
 auto-instrumentation package, because the GenAI conventions are still changing and the pipeline should not
 break when they do.
