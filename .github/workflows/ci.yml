@@ -17,5 +17,5 @@ jobs:
         run: pip install ".[dev]"
       - name: Lint
         run: ruff check .
-      - name: Tests (offline: no API key, no database, no browser)
+      - name: Tests (offline, no API key, database or browser)
         run: pytest
