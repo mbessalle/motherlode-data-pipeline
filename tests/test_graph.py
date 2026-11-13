@@ -51,7 +51,18 @@ def test_supported_extraction_is_inserted_with_article_metadata(harness):
     assert final["outcome"] == "inserted" and final["attempts"] == 1
     row = harness.store.tables["north_america"][0]
     assert row["project_name"] == "Acme" and row["cash_payments_value"] == 100000
-    assert row["news_link"] == "https://example.test/acme" and row["news_date"] == "2025-03-01"
+    assert row["news_link"] == "https://example.test/acme" and row["news_date"] == "2025-03-01"   # listing date: none extracted
+
+
+def test_release_date_from_the_announcement_replaces_the_listing_date(harness):
+    harness.text = "TORONTO, February 27, 2025 - " + ARTICLE_TEXT
+    harness.extractions = [{**GOOD, "news_date": "2025-02-27"}]
+    harness.run(article())
+    assert harness.store.tables["north_america"][0]["news_date"] == "2025-02-27"
+    harness.store.tables["north_america"].clear()
+    harness.extractions = [{**GOOD, "news_date": "2025-02-20"}]            # a date the announcement does not write
+    harness.run(article())
+    assert harness.store.tables["north_america"][0]["news_date"] == "2025-03-01"
     assert harness.queued() == []
 
 
@@ -126,3 +137,9 @@ def test_one_trace_per_article_with_the_steps_as_spans(harness):
     assert {s.context.trace_id for s in spans} == {root.context.trace_id}
     first_check = next(s for s in spans if s.name == "validate")
     assert first_check.attributes["pipeline.validate.not_found"] == "shares_amount"
+
+
+def test_committed_diagram_matches_the_compiled_graph():
+    from tools.draw_graph import OUTPUT, render
+
+    assert OUTPUT.read_text() == render(), "run `python -m tools.draw_graph` and commit docs/graph.md"
