@@ -3,6 +3,7 @@ name = "motherlode-data-pipeline"
 version = "2.0.0"
 description = "Mining M&A news to a structured deal database: LLM extraction with deterministic validation, LangGraph routing and OpenTelemetry tracing."
 requires-python = ">=3.11"
+license = { text = "MIT" }
 dependencies = [
     "langgraph>=1.2,<2",
     "openai>=3,<4",
