@@ -178,6 +178,18 @@ On a 30-deal sample of the client analyst's own deals, replayed through the prod
 by Jev, 43 by Opus with a quote code confirmed, 5 by the market price, and 31 left for review**. Jev cost under
 0.01 USD for the run; Opus read 26 of the 35 stored rows.
 
+Some stored rows from that run, with how each value was verified (all public announcements):
+
+| Deal | Field | Stored | Verified by | Evidence |
+|---|---|---|---|---|
+| Telfer (Greatland Gold buys Telfer and Havieron from Newmont) | `owner_name` | Greatland Gold plc | Opus | "agreed to sell the Telfer operation ... to Greatland" |
+| | `shares_value` | 83,750,000 USD | Opus; split by code | "Equity consideration of $167.5 million", shared by 2 projects, one row each |
+| Coonambula (Dart Mining farm-in) | `exp_comit_value` | 1,000,000 USD | Opus; computed by code | "a minimum of 4,000m of drilling", at the client's 250 USD a metre |
+| Marble Bar (Kali Metals buys Florance Resources) | `shares_value` | 200,000 AUD | Opus | "$200,000 worth of ordinary shares" |
+| | `aggregate_deal_value` | 230,000 AUD | Opus; computed by code | "$30,000 cash" + the shares value |
+| Oasis (Greenvale Energy acquisition) | `share_price` | 0.034 AUD | code: market close | GRV.AX close on the news date (not in the announcement) |
+| Thowagee (Taruga option) | `project_area` | 3,150 ha | Opus; converted by code | "E08/3245 ... 10 [blocks] 31.5" km² in the tenement table |
+
 Why Jev and not a cheap generative model as the middle tier: both were measured on the same cases
 ([`evals/judge_benchmark.py`](evals/judge_benchmark.py)), the 28 cells Jev flagged that Opus then confirmed as
 correct, plus 16 wrong values built from the same passages (another number of the same kind). Same field
