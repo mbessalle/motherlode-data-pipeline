@@ -27,7 +27,9 @@ _TITLE_NOISE = {"the", "for", "and", "with", "from", "into", "its", "has", "have
                 "minerals", "mining", "metals", "resources", "shares", "deal", "acquisition", "sale", "option", "agreement",
                 # headline verbs are the listing site's wording, not the release's
                 "acquires", "acquire", "agrees", "completes", "closes", "secures", "signs", "sells", "divests", "options",
-                "announces", "enters", "clears", "approve", "approves", "locks", "buys", "takes", "wins", "sets"}
+                "announces", "enters", "clears", "approve", "approves", "locks", "buys", "takes", "wins", "sets",
+                "advances", "expands", "increases", "extends", "strengthens", "moves", "executes", "executed",
+                "exercises", "exercised", "finalises", "finalizes", "amended", "amendment", "update", "completion"}
 _MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
            "December"]
 # The listing site publishes its item up to two weeks after the release it reports.
@@ -61,10 +63,13 @@ def distinctive_words(title: str) -> set[str]:
 
 
 def date_spellings(day: date) -> list[str]:
-    """How a release writes its date: November 12, 2026 / Nov. 12, 2026 / 12 November 2026 / 2026-11-12."""
-    month, short = _MONTHS[day.month - 1], _MONTHS[day.month - 1][:3]
-    return [rf"{month} {day.day}(?:st|nd|rd|th)?,? {day.year}", rf"{short}\.? {day.day}(?:st|nd|rd|th)?,? {day.year}",
-            rf"{day.day}(?:st|nd|rd|th)? {month},? {day.year}", rf"{day.day} {short}\.? {day.year}", day.isoformat()]
+    """How a release writes its date: November 12, 2026 / Nov. 12, 2026 / 12 November 2026 / 04 March 2025 /
+    2026-11-12 / 20/11/2024 / 20.11.2024 / 20-11-2024 / 20/11/24. Numeric dates are read day first, as Australian
+    and Canadian releases write them (row 248: "ASX ANNOUNCEMENT 20/11/2024")."""
+    month, short, d, m, y = _MONTHS[day.month - 1], _MONTHS[day.month - 1][:3], day.day, day.month, day.year
+    return [rf"{month} 0?{d}(?:st|nd|rd|th)?,? {y}", rf"{short}\.? 0?{d}(?:st|nd|rd|th)?,? {y}",
+            rf"0?{d}(?:st|nd|rd|th)? {month},? {y}", rf"0?{d} {short}\.? {y}", day.isoformat(),
+            rf"0?{d}[/.-]0?{m}[/.-]{y}", rf"0?{d}/0?{m}/{y % 100:02d}(?!\d)"]
 
 
 def dated_near(text: str, listed: str) -> bool:

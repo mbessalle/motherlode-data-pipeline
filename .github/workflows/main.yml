@@ -28,7 +28,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install .
+        run: pip install ".[market]"   # the buyer's close on the news date fills or confirms the share price
 
       - name: Run the pipeline
         run: python orchestrator.py
@@ -40,6 +40,8 @@ jobs:
           dbname: ${{ secrets.DB_NAME }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          # Optional: Jev's check that the stored owner is the buyer (about 0.00004 USD a deal); off when unset
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MAX_ARTICLES: ${{ inputs.max_articles }}
           # Optional: send traces to a collector
           OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}

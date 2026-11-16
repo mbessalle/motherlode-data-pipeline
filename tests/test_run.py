@@ -64,7 +64,8 @@ def test_llm_calls_carry_genai_attributes_and_survive_failures():
     telemetry.setup(extra_processor=SimpleSpanProcessor(exporter))
     client = FakeClient([{"country": "Canada", "continent": "North America"}, RuntimeError("rate limited")])
     assert llm.classify_location(client, "model-a", "tags: 'Canada'") == {"country": "Canada", "continent": "North America"}
-    assert llm.extract_deal(client, "model-b", "article", {"project_name": "Acme"}) == {}
+    # a failed call is reported as a failure, not as an empty reply (critic finding F2)
+    assert llm.extract_deal(client, "model-b", "article", {"project_name": "Acme"}) == {"_error": "RuntimeError"}
     ok, failed = exporter.get_finished_spans()
     assert ok.attributes["gen_ai.request.model"] == "model-a" and ok.attributes["gen_ai.operation.name"] == "chat"
     assert ok.attributes["gen_ai.usage.input_tokens"] == 1200 and ok.attributes["gen_ai.usage.output_tokens"] == 300
@@ -72,12 +73,14 @@ def test_llm_calls_carry_genai_attributes_and_survive_failures():
     assert client.requests[1]["response_format"] == {"type": "json_object"}
 
 
-def test_triage_normalises_the_reply_and_treats_a_failed_call_as_no():
+def test_triage_normalises_the_reply_and_reports_a_failed_call_as_a_failure():
     client = FakeClient([{"is_project_deal": True, "project_name": " Acme ", "reason": "sale"},
                          {"is_project_deal": "yes", "project_name": ""}, RuntimeError("down")])
-    assert llm.triage(client, "m", "t", "c", "text") == {"is_project_deal": True, "project_name": "Acme", "reason": "sale"}
-    assert llm.triage(client, "m", "t", "c", "text")["is_project_deal"] is False       # only a real true counts
-    assert llm.triage(client, "m", "t", "c", "text") == {"is_project_deal": False, "project_name": None, "reason": None}
+    assert llm.triage(client, "m", "t", "c", "text") == {"is_project_deal": True, "project_name": "Acme", "projects": [], "reason": "sale"}
+    malformed = llm.triage(client, "m", "t", "c", "text")                                # only a real true counts
+    assert malformed["is_project_deal"] is False and malformed["error"] == "malformed reply"
+    assert llm.triage(client, "m", "t", "c", "text") == {"is_project_deal": False, "project_name": None, "projects": [], "reason": None,
+                                                          "error": "RuntimeError"}
 
 
 def test_retry_prompt_names_the_unsupported_values():

@@ -20,7 +20,10 @@ _LINK = re.compile(r"/company/(?P<company>[^/]+)/[^/]+/(?P<slug>.+)-(?P<id>\d+)$
 # which headlines are worth a search; the model decides afterwards on the announcement itself.
 DEAL_WORDS = re.compile(
     r"acqui|divest|\bsells?\b|\bsale\b|\bsold\b|purchas|\boption|earn[- ]in|joint venture|\bjv\b|farm[- ]?in|farm[- ]?out|"
-    r"merger|\bmerge|takeover|arrangement|consolidat|\bstake\b|\binterest in\b|agreement to", re.I)
+    r"merger|\bmerge|takeover|arrangement|consolidat|\bstake\b|\binterest in\b|agreement|"
+    # missed in the seed-7 sample (13 of 30 analyst deals dropped): tenure and ground added by agreement
+    r"\btenure\b|\btenements?\b|landholding|\bportfolio\b|\bsecures?\b|\bexpands?\b|\baddition\b|\bamend|"
+    r"\bgranted\b|\bgrant of\b", re.I)                    # row 384: "ILT granted copper exploration licence"
 
 
 def parse_news_sitemap(xml_text: str) -> list[dict]:

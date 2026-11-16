@@ -86,6 +86,17 @@ class DealExtraction(BaseModel):
     news_date: Annotated[date | None, BeforeValidator(_blank_to_none)] = None
 
 
+def _name_list(value):
+    """A list of names: null is an empty list, one name is a list of one, blank entries are dropped (critic N1)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError("must be a list of names")
+    return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+
+
 class TriageVerdict(BaseModel):
     """The screening call's reply. Only a real boolean counts: "yes" is not true."""
 
@@ -93,6 +104,7 @@ class TriageVerdict(BaseModel):
 
     is_project_deal: StrictBool = False
     project_name: Text = None
+    projects: Annotated[list[str], BeforeValidator(_name_list)] = Field(default_factory=list)
     reason: Text = None
 
 
@@ -105,7 +117,19 @@ def issues(extraction: dict) -> list[str]:
         return [f"{'.'.join(str(part) for part in e['loc'])}: {e['msg']} (got {e['input']!r})" for e in error.errors()]
 
 
+# The client stores area in hectares (the client's field definitions).
+HECTARES_PER_UNIT = {"ha": 1, "hectare": 1, "hectares": 1, "km2": 100, "km²": 100, "sq km": 100, "sqkm": 100,
+                     "square kilometres": 100, "square kilometers": 100, "acres": 0.404686, "acre": 0.404686}
+
+
 def normalise(extraction: dict) -> dict:
     """The extraction with the schema's types applied: numeric strings become numbers, blanks and nulls are
-    left out, unknown keys are dropped. Call only on an extraction that has no issues."""
-    return DealExtraction.model_validate(extraction).model_dump(mode="json", exclude_none=True)
+    left out, unknown keys are dropped, and an area is converted to hectares (unit "Ha"). Call only on an
+    extraction that has no issues; an area in a unit that is not an area is withheld by the validator first."""
+    row = DealExtraction.model_validate(extraction).model_dump(mode="json", exclude_none=True)
+    factor = HECTARES_PER_UNIT.get((row.get("project_area_unit") or "").strip().lower())
+    if row.get("project_area") is not None and factor is not None:
+        row["project_area"], row["project_area_unit"] = round(row["project_area"] * factor, 4), "Ha"
+    if row.get("project_area") is None:
+        row.pop("project_area_unit", None)          # a unit without its area means nothing (critic S1)
+    return row

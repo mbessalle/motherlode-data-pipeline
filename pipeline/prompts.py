@@ -97,6 +97,7 @@ You are a meticulous and highly precise financial analyst for the mining industr
 - **SHARED COMMITMENTS:** If a value is shared between N projects, use `VALUE / N`.
 - **RESOURCE RULE:** `resource_value_scraped` is for mass/volume only (e.g., 'tonnes', 'ounces'), starting with a number. It must be `null` if no resource is stated.
 - **EXPLORATION COMMITMENTS:** If given in meters, convert to USD (1 meter = 250 USD).
+- **FARM-IN / EARN-IN INTEREST:** For an earn-in, farm-in or staged option, `interest_acquired_percent` is the final interest the buyer can earn, not its current interest or an intermediate stage.
 """
 
 TRIAGE_SYSTEM_PROMPT = """
@@ -114,5 +115,9 @@ Respond with a single JSON object with exactly these keys:
   as the announcement writes it, without commodity words and without "Project", "Property", "Mine", "Deposit" or
   "Claims" (for example "Big Onion", not "Big Onion copper-molybdenum property"). If the transaction covers a list
   of properties, give the name the announcement uses for the group, or null if it has none. null if there is no project.
+- "projects": a list of the separate projects or properties the transaction covers, each written the same way, one
+  entry per project that would get its own database row (for example ["Telfer", "Havieron"] for "the Telfer mine and
+  the Havieron project"). One entry when the transaction covers one project, even if its name contains "and"
+  ("Lord and Lady Hill"). An empty list if there is no project.
 - "reason": one short sentence
 """

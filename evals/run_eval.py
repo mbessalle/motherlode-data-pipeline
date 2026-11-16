@@ -52,8 +52,12 @@ def fetch(_args) -> None:
         print(f"{case['id']:>7} {len(path.read_text()):>6} chars  {note}")
 
 
+# Replies are cached per prompt version, so a changed extraction prompt is measured again, never read from old replies.
+PROMPT_VERSION = hashlib.sha256(llm.EXTRACTOR_SYSTEM_PROMPT.encode()).hexdigest()[:8]
+
+
 def extraction(client, model: str, case: dict, attempt: int, feedback: str | None) -> dict:
-    path = CACHE / "extractions" / model / f"attempt{attempt}" / f"{case['id']}.json"
+    path = CACHE / "extractions" / model.removeprefix("openai/") / PROMPT_VERSION / f"attempt{attempt}" / f"{case['id']}.json"
     if path.exists():
         return json.loads(path.read_text())
     text = " ".join(text_path(case).read_text().split())
@@ -71,10 +75,16 @@ def agrees(a, b) -> bool:
 def score(args) -> None:
     cases = [c for c in load_cases() if text_path(c).exists()]
     client = None
-    if not all((CACHE / "extractions" / args.model / "attempt1" / f"{c['id']}.json").exists() for c in cases) or args.retry:
+    if not all((CACHE / "extractions" / args.model / PROMPT_VERSION / "attempt1" / f"{c['id']}.json").exists() for c in cases) \
+            or args.retry:
         import openai
 
-        client = openai.OpenAI(api_key=config.load().openai_api_key or os.environ["OPENAI_API_KEY"])
+        key = config.load().openai_api_key or os.getenv("OPENAI_API_KEY")
+        if key:
+            client = openai.OpenAI(api_key=key)
+        else:              # the same model through OpenRouter, same price
+            client = openai.OpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.environ["OPENROUTER_API_KEY"])
+            args.model = f"openai/{args.model}"
 
     def run_case(case: dict) -> dict:
         text = " ".join(text_path(case).read_text().split())
@@ -130,7 +140,7 @@ def score(args) -> None:
     report_text = "\n".join(out) + "\n"
     print(report_text)
     (HERE / "results").mkdir(exist_ok=True)
-    (HERE / "results" / f"{args.model}{'-retry' if args.retry else ''}.md").write_text(report_text)
+    (HERE / "results" / f"{args.model.removeprefix('openai/')}{'-retry' if args.retry else ''}.md").write_text(report_text)
 
 
 def main() -> None:

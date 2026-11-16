@@ -15,9 +15,9 @@ every step is traced.
 | **Relevance screening** | A free headline filter, then a small LLM decides "project deal or not" on the announcement itself, before the expensive model runs |
 | **LangGraph** | Per-article state machine with a validate → retry → quarantine loop |
 | **OpenTelemetry** | One trace per run, GenAI attributes (model, tokens) on every model call |
-| **Evals** | 33 real press releases: **98% of extracted numbers are supported by the source** |
+| **Evals** | 33 real press releases: **94% of extracted numbers are supported by the source**, and 86 of 109 values agree with a human analyst |
 | **Pydantic** | Typed schema for every model reply: types, ranges, ISO currencies, dates; a reply that breaks it is not written |
-| **Deterministic validation** | Unit-aware grounding of every number; 69 offline tests; CI on every push |
+| **Deterministic validation** | Unit-aware grounding of every number; 139 offline tests; CI on every push |
 | **Measured model choice** | A decision-model API benchmarked against chat calls on accuracy, latency and cost before deciding |
 | **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
 
@@ -155,34 +155,73 @@ Details that turned out to matter on real announcements, each pinned by a test:
 
 `DERIVED` is a plausibility test, not a proof, and the eval reports it separately from `FOUND`.
 
+## Verifying every value: code, then Jev, then Opus
+
+The validator above only asks "is this number written in the article?". A number can be written and still be the
+wrong thing: a share count stored as cash, an older deal's price, the seller stored as the buyer. Checking meaning
+is a judgment, so it goes to models, but only as far as needed, each tier settling what the cheaper one could not:
+
+```mermaid
+flowchart LR
+    C["Code<br/>finds every place a value is written,<br/>does all arithmetic,<br/>looks up the market price"] -->|"meaning?"| J{{"Jev decision model<br/>closed questions with probabilities:<br/>is this value this field? is this company the buyer?<br/>~0.00004 USD a question"}}
+    J -->|"P &ge; 0.8"| A(["accepted"])
+    J -->|"unsure"| O["Opus<br/>reads the whole document for the flagged deals only,<br/>answers with a quote per value"]
+    O --> Q{"Code checks Opus:<br/>quote in the document?<br/>value in the quote or by a rule?"}
+    Q -->|"yes"| A2(["verified or corrected"])
+    Q -->|"no"| R(["review queue"])
+```
+
+On a 30-deal sample of the client analyst's own deals, replayed through the production `run()`
+([`evals/end_to_end.py`](evals/end_to_end.py), 8 deals at a time): 161 stored cells, of which **82 were settled
+by Jev, 43 by Opus with a quote code confirmed, 5 by the market price, and 31 left for review**. Jev cost under
+0.01 USD for the run; Opus read 26 of the 35 stored rows. Jev turned out to be reliable when it accepts and too
+strict when it flags (it distrusts "100% interest"), which is why it is a filter in front of Opus, not a judge.
+The buyer question runs in production too ([`pipeline/buyer.py`](pipeline/buyer.py)): an owner Jev scores
+below 0.5 is withheld for review instead of stored.
+
+**The checks were themselves reviewed.** An adversarial reviewer agent
+([`.claude/agents/pipeline-critic.md`](.claude/agents/pipeline-critic.md)) audits each end-to-end run from its own
+git worktree, reading the run report, spans and source documents, and reports bugs with a failing test.
+Round 1 found 15 (among them "1m @ 6.15 g/t" read as one million, a failed model call reported as a real "no",
+and a deal over two projects stored as one row); round 2 found 13 more, several in the fixes of round 1. Every
+finding is a test in [`tests/test_critic_findings.py`](tests/test_critic_findings.py) and
+[`tests/test_critic_round2.py`](tests/test_critic_round2.py).
+
 ## Measured results
 
-`python -m evals.run_eval score --model gpt-6.1-terra --retry` runs the production prompt, unchanged, on 33 saved
-press releases ([`evals/cases.jsonl`](evals/cases.jsonl)) and scores the output with the validator.
+`python -m evals.run_eval score --model gpt-6.1-terra --retry` runs the production prompt on 33 saved press
+releases ([`evals/cases.jsonl`](evals/cases.jsonl)) and scores the output with the validator. Replies are cached
+per prompt version, so a prompt change is always measured again.
 
 | | First attempt | After the corrected retry |
 |---|---|---|
-| Extracted numbers supported by the article | 122 of 126 (97%) | **123 of 126 (98%)** |
-| Records with every number supported | 30 of 33 | **31 of 33** |
+| Extracted numbers supported by the article | 122 of 131 (93%) | **123 of 131 (94%)** |
+| Records with every number supported | 27 of 33 | **28 of 33** |
 
 | Field | Written in article | Derived by a rule | Unsupported | Empty |
 |---|---|---|---|---|
-| `cash_payments_value` | 11 | 7 | 0 | 15 |
-| `exp_comit_value` | 7 | 4 | 0 | 22 |
-| `shares_amount` | 12 | 7 | 1 | 13 |
+| `cash_payments_value` | 11 | 6 | 1 | 15 |
+| `exp_comit_value` | 7 | 2 | 2 | 22 |
+| `shares_amount` | 12 | 4 | 3 | 14 |
 | `share_price` | 4 | 0 | 0 | 29 |
 | `shares_value` | 3 | 1 | 1 | 28 |
-| `aggregate_deal_value` | 1 | 7 | 1 | 24 |
+| `aggregate_deal_value` | 1 | 8 | 0 | 24 |
 | `nsr_percent` | 16 | 0 | 0 | 17 |
-| `interest_acquired_percent` | 23 | 0 | 0 | 10 |
+| `interest_acquired_percent` | 25 | 0 | 0 | 8 |
 | `project_area` | 20 | 0 | 0 | 13 |
+| `shares_value_scraped` | 3 | 0 | 1 | 29 |
 
-Three records were retried and one became fully supported. The retry is cheap insurance, not the main defence:
-the values it does not fix are withheld by the quarantine step.
+The figure was 98% before an end-to-end review found that the "derived" rules were too permissive: a total split
+across any 2 to 6 projects, or a sum of any amounts in the document, accepted 4% to 36% of invented round numbers.
+Two of the old derivations had the right value with the wrong evidence (a royalty buy-down price "split" into an
+exploration commitment). Splits now need a stated number of projects (or, in the pipeline, the triage model's list
+of projects), and sum terms must be written near each other. The 5 correct values the stricter rules no longer
+accept go to the review tiers below instead of being accepted on wrong evidence.
 
 **Agreement with a human analyst.** The same deals were entered by hand in the analyst's spreadsheet. Where both
-have a value, the model agrees on 83 of 108 (77%): interest acquired 22 of 23, NSR 14 of 16, exploration
-commitment 9 of 11, share price 3 of 3, project area 14 of 20, share count 11 of 18, cash 10 of 17.
+have a value, the model agrees on 86 of 109 (79%): interest acquired 24 of 25 (the farm-in rule, final interest
+the buyer can earn, is now in the prompt), NSR 14 of 16, exploration commitment 9 of 11, share price 3 of 3,
+project area 14 of 20, share count 12 of 17, cash 10 of 17.
 Part of the cash gap is by design (the spreadsheet is converted to CAD); the rest is disagreement the validator
 cannot see by itself, which is why this comparison is in the eval.
 
@@ -248,7 +287,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 74 tests, offline: no API key, database or network needed
+pytest                      # 139 tests, offline: no API key, database or network needed
 pip install ".[ocr]"        # optional: read scanned PDFs (RapidOCR, local, no system package)
 ruff check .
 
@@ -278,8 +317,13 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 | [`pipeline/sources.py`](pipeline/sources.py) | Discovery from the news sitemap, headline filter, state file |
 | [`pipeline/search.py`](pipeline/search.py) | Web search for the announcement and the identity test a result must pass |
 | [`pipeline/pdf.py`](pipeline/pdf.py) | PDF text: the free text layer first, local OCR only for pages that have none |
-| [`pipeline/telemetry.py`](pipeline/telemetry.py) | OpenTelemetry setup |
+| [`pipeline/market.py`](pipeline/market.py) | The buyer's close on the news date (yfinance), for the client's market share price |
+| [`pipeline/buyer.py`](pipeline/buyer.py), [`pipeline/jev.py`](pipeline/jev.py) | Is the stored owner the buyer? A probability from the Jev decision model |
+| [`pipeline/telemetry.py`](pipeline/telemetry.py) | OpenTelemetry setup; spans to Jaeger, the console or a JSON-lines file |
 | [`evals/`](evals/) | Eval cases, runner and results |
+| [`evals/end_to_end.py`](evals/end_to_end.py) | Replays a sample of the analyst's deals through the production `run()` |
+| [`evals/cell_check.py`](evals/cell_check.py), [`evals/escalate.py`](evals/escalate.py), [`evals/apply_checks.py`](evals/apply_checks.py) | The three-tier value check: code, then Jev, then Opus for what stays uncertain |
+| [`.claude/agents/pipeline-critic.md`](.claude/agents/pipeline-critic.md) | The adversarial reviewer that audits each end-to-end run in its own worktree |
 | [`tools/integrity_checks.sql`](tools/integrity_checks.sql) | Read-only checks for the tables themselves |
 | [`docs/extraction-rules/`](docs/extraction-rules/) | The domain rules behind the prompt, written on ~700 historical transactions |
 | [`tests/`](tests/) | Validator rules, every exit of the graph, the search identity test, the run end to end |

@@ -20,6 +20,7 @@ graph TD;
 	__end__([<p>__end__</p>]):::last
 	__start__ --> resolve;
 	extract -.-> __end__;
+	extract -.-> quarantine;
 	extract -.-> validate;
 	quarantine -.-> __end__;
 	quarantine -.-> store;
