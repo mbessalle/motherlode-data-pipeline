@@ -6,12 +6,13 @@ The listing site rewrites headlines, so the test is on distinctive words, not on
 """
 from __future__ import annotations
 
-import io
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import requests
+
+from pipeline.pdf import pdf_text
 
 SERPER_URL = "https://google.serper.dev/search"
 BROWSER_UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
@@ -124,10 +125,7 @@ def read_page(url: str, get=requests.get) -> tuple[str | None, str]:
         if response.status_code != 200:
             return None, f"http {response.status_code}"
         if "pdf" in response.headers.get("content-type", "") or url.lower().split("?")[0].endswith(".pdf"):
-            from pypdf import PdfReader
-
-            pages = PdfReader(io.BytesIO(response.content)).pages
-            return "\n".join(page.extract_text() or "" for page in pages), "pdf"
+            return pdf_text(response.content)
         import trafilatura
 
         return trafilatura.extract(response.text, include_tables=True, favor_recall=True), "html"
