@@ -206,7 +206,22 @@ def ask_model(project: str, flags: dict, text: str, call=claude_code) -> tuple[d
     return answer, {"cached": False, **usage}
 
 
-PARALLEL = int(os.getenv("ESCALATE_PARALLEL", "13"))   # deals reviewed at once: independent claude -p processes
+MB_PER_CALL = 500       # one claude -p process peaks near 290 MB; a long document in the prompt adds more
+
+
+def safe_parallel(wanted: int, available_mb: float | None = None) -> int:
+    """At most `wanted` claude -p processes, and never more than 40% of the free memory allows: 26 at once froze a
+    14 GB laptop."""
+    if available_mb is None:
+        try:
+            info = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+            available_mb = int(info["MemAvailable"].split()[0]) / 1024
+        except (OSError, KeyError, ValueError):
+            available_mb = 4000
+    return max(1, min(wanted, int(available_mb * 0.4 / MB_PER_CALL)))
+
+
+PARALLEL = safe_parallel(int(os.getenv("ESCALATE_PARALLEL", "13")))   # deals reviewed at once
 
 
 def run(run_dir: Path, call=claude_code) -> list[dict]:

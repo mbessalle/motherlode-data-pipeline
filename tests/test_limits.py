@@ -25,3 +25,10 @@ def test_a_failed_opus_call_skips_its_deal_and_the_run_goes_on(tmp_path, monkeyp
     monkeypatch.setattr(escalate, "ask_model", lambda *a: (_ for _ in ()).throw(RuntimeError("limit")))
     assert escalate.run(tmp_path) == []
     assert len(__import__("json").loads((tmp_path / "escalate_failed.json").read_text())) == 2
+
+
+def test_parallel_opus_calls_are_capped_by_free_memory():
+    from evals.escalate import safe_parallel
+    assert safe_parallel(26, available_mb=11000) == 8      # the 14 GB laptop that froze at 26
+    assert safe_parallel(4, available_mb=11000) == 4
+    assert safe_parallel(26, available_mb=300) == 1
