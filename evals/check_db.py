@@ -21,12 +21,12 @@ import datetime as dt
 import json
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from evals import end_to_end
 from evals.cell_check import FIELDS, check_cell, check_parties
 from evals.documents import document_text
+from evals.limits import run_with_limits
 from pipeline import config
 from pipeline.pdf import pdf_text
 from pipeline.schema import HECTARES_PER_UNIT
@@ -40,6 +40,7 @@ def key_of(table: str, row: dict) -> str:
     return f"{table}:{row['id']}"
 
 
+LIMIT = 30          # seconds: a row or a document lookup still running after this is killed and listed
 _PDF_LOCK = threading.Lock()
 
 
@@ -98,8 +99,8 @@ def documents(export: dict, run_dir: Path, workers: int = 8) -> dict[str, str]:
         return key, str(path)
 
     items = [(t, r) for t, rs in export.items() for r in rs]
-    with ThreadPoolExecutor(workers) as pool:
-        return {k: v for k, v in pool.map(one, items) if v}
+    found, _ = run_with_limits(items, one, workers=workers, limit=LIMIT, stall=LIMIT, label="documents looked up")
+    return {k: v for k, v in (f for f in found if f) if v}
 
 
 def check(export_path: Path, run_dir: Path, limit: int | None = None, workers: int = 8) -> None:
@@ -128,8 +129,11 @@ def check(export_path: Path, run_dir: Path, limit: int | None = None, workers: i
         entry = {"id": key, "project_name": project, "source_url": docs[key], "validation": report.as_dict()}
         return entry, cells, party
 
-    with ThreadPoolExecutor(workers) as pool:
-        results = list(pool.map(one, rows))
+    # Each row in its own process, killed after LIMIT seconds; the run stops with STALLED if nothing finishes.
+    out, failed = run_with_limits(rows, one, workers=workers, limit=LIMIT, stall=LIMIT, label="rows checked")
+    results = [r for r in out if r is not None]
+    timed_out = [key_of(*rows[i]) for i in failed]
+    (run_dir / "timed_out.json").write_text(json.dumps(timed_out))
     write = lambda name, lines: (run_dir / name).write_text("".join(json.dumps(x, default=str) + "\n" for x in lines))  # noqa: E731
     (run_dir / "run_report.json").write_text(json.dumps([r[0] for r in results], default=str))
     write("cells.jsonl", [c for r in results for c in r[1]])
@@ -137,7 +141,7 @@ def check(export_path: Path, run_dir: Path, limit: int | None = None, workers: i
     unchecked = [key_of(t, r) for t, rs in export.items() for r in rs if key_of(t, r) not in docs]
     (run_dir / "unchecked.json").write_text(json.dumps(unchecked))
     cells = [c for r in results for c in r[1]]
-    print(f"rows checked: {len(results)}; without a document: {len(unchecked)}; cells: {len(cells)}; "
+    print(f"rows checked: {len(results)}; timed out: {len(timed_out)}; without a document: {len(unchecked)}; cells: {len(cells)}; "
           f"accepted by code and Jev: {sum(c['action'] == 'accept' for c in cells)}; "
           f"to Opus: {len({c['row_id'] for c in cells if c['action'] != 'accept'})} rows")
 
