@@ -207,15 +207,21 @@ def ask_model(project: str, flags: dict, text: str, call=claude_code) -> tuple[d
     return answer, {"cached": False, **usage}
 
 
+PARALLEL = int(os.getenv("ESCALATE_PARALLEL", "13"))   # deals reviewed at once: independent claude -p processes
+
+
 def run(run_dir: Path, call=claude_code) -> list[dict]:
-    results = []
-    for key, flags in flagged(run_dir).items():
-        row_id = key[0]
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(item):
+        key, flags = item
         project, text = document(run_dir, key)
         answer, usage = ask_model(project, flags, text, call)
         count = max((c.get("project_count") or 1) for c in flags["cells"]) if flags["cells"] else 1
-        results.append({"row_id": row_id, "project": project, "usage": usage, **check_answer(answer, text, count)})
-    return results
+        return {"row_id": key[0], "project": project, "usage": usage, **check_answer(answer, text, count)}
+
+    with ThreadPoolExecutor(PARALLEL) as pool:      # results keep the order of the flagged deals
+        return list(pool.map(one, flagged(run_dir).items()))
 
 
 def summary(results: list[dict]) -> str:
