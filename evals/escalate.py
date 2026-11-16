@@ -212,15 +212,17 @@ PARALLEL = int(os.getenv("ESCALATE_PARALLEL", "13"))   # deals reviewed at once:
 def run(run_dir: Path, call=claude_code) -> list[dict]:
     from concurrent.futures import ThreadPoolExecutor
 
+    # Documents are read one after another (the PDF library is not thread-safe); only the claude -p calls run at once.
+    items = [(key, flags, *document(run_dir, key)) for key, flags in flagged(run_dir).items()]
+
     def one(item):
-        key, flags = item
-        project, text = document(run_dir, key)
+        key, flags, project, text = item
         answer, usage = ask_model(project, flags, text, call)
         count = max((c.get("project_count") or 1) for c in flags["cells"]) if flags["cells"] else 1
         return {"row_id": key[0], "project": project, "usage": usage, **check_answer(answer, text, count)}
 
     with ThreadPoolExecutor(PARALLEL) as pool:      # results keep the order of the flagged deals
-        return list(pool.map(one, flagged(run_dir).items()))
+        return list(pool.map(one, items))
 
 
 def summary(results: list[dict]) -> str:
