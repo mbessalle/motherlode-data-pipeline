@@ -17,7 +17,9 @@ every step is traced.
 | **OpenTelemetry** | One trace per run, GenAI attributes (model, tokens) on every model call |
 | **Evals** | 33 real press releases: **94% of extracted numbers are supported by the source**, and 86 of 109 values agree with a human analyst |
 | **Pydantic** | Typed schema for every model reply: types, ranges, ISO currencies, dates; a reply that breaks it is not written |
-| **Deterministic validation** | Unit-aware grounding of every number; 139 offline tests; CI on every push |
+| **Value verification** | Every stored value checked for meaning in three tiers: code (exact), the Jev decision model (closed questions with probabilities), Opus only for what stays uncertain, with its quotes checked by code. [Details](#verifying-every-value-code-then-jev-then-opus) |
+| **Adversarial review agent** | A critic agent audits each end-to-end run from its own git worktree; two rounds found 28 bugs, each now a test |
+| **Deterministic validation** | Unit-aware grounding of every number; 140 offline tests; CI on every push |
 | **Measured model choice** | A decision-model API benchmarked against chat calls on accuracy, latency and cost before deciding |
 | **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
 
@@ -287,7 +289,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 139 tests, offline: no API key, database or network needed
+pytest                      # 140 tests, offline: no API key, database or network needed
 pip install ".[ocr]"        # optional: read scanned PDFs (RapidOCR, local, no system package)
 ruff check .
 
@@ -350,7 +352,11 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
   Recall is only visible in the analyst comparison, on 33 cases.
 - A press release found by search is not always the document the source listing served; cases whose source
   could not be confirmed as the right, complete release were left out of the eval (7 of 40 sampled).
-- Share price is rarely stated in an announcement, so it is usually empty here and filled by analysts elsewhere.
+- Share price is rarely stated in an announcement, so it is taken from the market: the buyer's close on the news
+  date from Yahoo Finance (yfinance). Those endpoints are unofficial; when a lookup fails, the price stays empty.
+- The Jev check is strict: on a hand-checked sample it flagged about two correct values for each wrong one,
+  notably "100% interest". It is a filter in front of Opus, not a judge, and its thresholds are not yet tuned
+  per field.
 - Finding the announcement is the weakest step: on one day's feed, 9 of 21 deal-like headlines ended with no
   accepted source. The identity test prefers missing a deal to writing the wrong one.
 - The listing gives only a headline, a date and a company, and its headlines are its own wording, so the
