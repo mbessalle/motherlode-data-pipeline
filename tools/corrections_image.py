@@ -31,8 +31,9 @@ def fetch(stamp: str, cells: list[str]) -> list[tuple]:
         with conn.cursor() as cur:
             for cell in cells:
                 table, row_id, field = cell.split(":")
-                cur.execute(sql.SQL("SELECT b.project_name, b.{f}, l.{f} FROM {b} b JOIN {l} l USING (id) WHERE id = %s").format(
-                    f=sql.Identifier(field), b=sql.Identifier(f"{table}_backup_{stamp}"), l=sql.Identifier(table)), (int(row_id),))
+                query = sql.SQL("SELECT b.project_name, b.{f}, l.{f} FROM {b} b JOIN {l} l USING (id) WHERE id = %s").format(
+                    f=sql.Identifier(field), b=sql.Identifier(f"{table}_backup_{stamp}"), l=sql.Identifier(table))
+                cur.execute(query, (int(row_id),))
                 row = cur.fetchone()
                 if row:
                     out.append((table, row[0], field, row[1], row[2]))
