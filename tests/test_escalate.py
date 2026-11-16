@@ -32,21 +32,24 @@ def test_a_value_must_be_written_in_its_quote_or_follow_by_a_rule():
 
 
 def test_only_deals_with_an_unsettled_cell_or_buyer_go_up(tmp_path):
-    cells = [{"row_id": 1, "field": "cash_payments_value", "action": "accept"},
-             {"row_id": 2, "field": "cash_payments_value", "action": "review"},
-             {"row_id": 3, "field": "nsr_percent", "action": "correct"}]
-    parties = [{"row_id": 1, "action": "accept"}, {"row_id": 4, "action": "review"}, {"row_id": 2, "action": "accept"}]
+    cells = [{"row_id": 1, "project": "A", "field": "cash_payments_value", "action": "accept"},
+             {"row_id": 2, "project": "B", "field": "cash_payments_value", "action": "review"},
+             {"row_id": 3, "project": "C", "field": "nsr_percent", "action": "correct"},
+             {"row_id": 3, "project": "D", "field": "nsr_percent", "action": "accept"}]     # same deal, other project
+    parties = [{"row_id": 1, "project": "A", "action": "accept"}, {"row_id": 4, "project": "E", "action": "review"},
+               {"row_id": 2, "project": "B", "action": "accept"}]
     (tmp_path / "cells.jsonl").write_text("".join(json.dumps(c) + "\n" for c in cells))
     (tmp_path / "parties.jsonl").write_text("".join(json.dumps(p) + "\n" for p in parties))
     flags = escalate.flagged(tmp_path)
-    assert sorted(flags) == [2, 3, 4] and flags[2]["party"] == {"row_id": 2, "action": "accept"}
+    assert sorted(flags) == [(2, "B"), (3, "C"), (4, "E")]
+    assert flags[(2, "B")]["party"] == {"row_id": 2, "project": "B", "action": "accept"}
 
 
 def test_the_answer_is_checked_and_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(escalate, "CACHE", tmp_path)
-    answer = {"cells": [{"field": "cash_payments_value", "verdict": "correct", "value": 1_250_000,
+    answer = {"cells": [{"field": "cash_payments_value", "verdict": "correct", "value": 1_250_000, "unit": "AUD",
                          "quote": "Cash consideration of A$250,000 and a milestone payment of A$1,000,000", "reason": "sum"},
-                        {"field": "nsr_percent", "verdict": "wrong", "value": 3, "quote": "a 3% royalty", "reason": "invented"}],
+                        {"field": "nsr_percent", "verdict": "wrong", "value": 3, "unit": None, "quote": "a 3% royalty", "reason": "invented"}],
               "buyer": {"name": "Fenix Resources Limited", "quote": "Fenix Resources Limited has agreed binding terms", "reason": "acquires"}}
     calls = []
 

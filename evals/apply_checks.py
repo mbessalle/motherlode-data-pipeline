@@ -21,6 +21,7 @@ from collections import Counter
 from pathlib import Path
 
 from evals.cell_check import projects_named
+from pipeline.schema import HECTARES_PER_UNIT
 from pipeline.validate import to_number
 
 
@@ -30,13 +31,14 @@ def load(path: Path) -> list[dict]:
 
 def apply(run_dir: Path) -> tuple[dict, list[dict]]:
     stored = json.loads((run_dir / "stored.json").read_text())
-    cells = {(c["row_id"], c["field"]): c for c in load(run_dir / "cells.jsonl")}
-    parties = {p["row_id"]: p for p in load(run_dir / "parties.jsonl")}
+    # keyed by deal id AND project: a deal over several projects has one row per project
+    cells = {(c["row_id"], c["project"], c["field"]): c for c in load(run_dir / "cells.jsonl")}
+    parties = {(p["row_id"], p["project"]): p for p in load(run_dir / "parties.jsonl")}
     opus = {}
     for r in load(run_dir / "escalations.jsonl"):
         for c in r.get("cells", []):
-            opus[(r["row_id"], c["field"])] = c
-        opus[(r["row_id"], "buyer")] = r.get("buyer") or {}
+            opus[(r["row_id"], r["project"], c["field"])] = c
+        opus[(r["row_id"], r["project"], "buyer")] = r.get("buyer") or {}
     report = {e["project_name"]: e["id"] for e in json.loads((run_dir / "run_report.json").read_text()) if e.get("project_name")}
     lines = []
     for rows in stored.values():
@@ -44,13 +46,14 @@ def apply(run_dir: Path) -> tuple[dict, list[dict]]:
             row_id = report.get(row.get("project_name"))
             combined = projects_named(row.get("project_name") or "") > 1
             # every checked cell of the row, including values the validator withheld (they are not in the row)
-            for field in sorted({f for (r, f) in cells if r == row_id}) + ["owner_name"]:
+            project = row.get("project_name")
+            for field in sorted({f for (r, pr, f) in cells if r == row_id and pr == project}) + ["owner_name"]:
                 old = row.get(field)
-                key = (row_id, field)
+                key = (row_id, project, field)
                 o, c = opus.get(key), cells.get(key)
                 new, by, why = old, "unchecked", ""
                 if field == "owner_name":
-                    p, buyer = parties.get(row_id, {}), opus.get((row_id, "buyer"), {})
+                    p, buyer = parties.get((row_id, project), {}), opus.get((row_id, project, "buyer"), {})
                     if o and o.get("quote_checked") is not False and buyer.get("quote_checked"):
                         new, by, why = buyer["name"] if o["verdict"] == "wrong" else old, "opus", o["reason"]
                     elif p.get("action") == "accept":
@@ -60,7 +63,14 @@ def apply(run_dir: Path) -> tuple[dict, list[dict]]:
                 elif o and combined and o["verdict"] != "correct":
                     by, why = "review", f"row combines {projects_named(row['project_name'])} projects (F6): split it first"
                 elif o and o["verdict"] in ("correct", "wrong") and o["quote_checked"]:
-                    new, by, why = (old if o["verdict"] == "correct" else o["value"]), "opus", o["reason"]
+                    value = o["value"]
+                    if field == "project_area" and value is not None:   # stored rows hold hectares
+                        factor = HECTARES_PER_UNIT.get((o.get("unit") or "").strip().lower())
+                        value = None if factor is None else round(value * factor, 4)
+                    if o["verdict"] == "wrong" and value is None:
+                        new, by, why = old, "review", f"opus: wrong, but its unit {o.get('unit')!r} is not convertible"
+                    else:
+                        new, by, why = (old if o["verdict"] == "correct" else value), "opus", o["reason"]
                 elif o:
                     by, why = "review", f"opus {o['verdict']}" + ("" if o["quote_checked"] else ", quote not confirmed")
                 elif c and c["action"] == "accept":

@@ -52,13 +52,15 @@ Consulting field sheet and emails):
 - interest_acquired_percent: the final interest the buyer acquires or can earn. nsr_percent: the royalty created,
   retained or acquired in this deal (not the part that can be bought back). project_area: the project's own area.
 - Only the transaction being announced counts, not earlier, legacy or superseded agreements, and not financings.
-Be rigorous: read the whole document, quote the exact words that support each value, and say "unsure" rather
+Give `unit` for every value: the currency code for money, "ha" or "km2" for project_area as you give it, null
+otherwise. Be rigorous: read the whole document, quote the exact words that support each value, and say "unsure" rather
 than guess."""
 
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["cells", "buyer"], "properties": {
     "cells": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                         "required": ["field", "verdict", "value", "quote", "reason"],
+                                         "required": ["field", "verdict", "value", "unit", "quote", "reason"],
                                          "properties": {"field": {"type": "string"},
+                                                        "unit": {"type": ["string", "null"]},
                                                         "verdict": {"type": "string", "enum": ["correct", "wrong", "unsure"]},
                                                         "value": {"type": ["number", "null"]},
                                                         "quote": {"type": "string"}, "reason": {"type": "string"}}}},
@@ -67,24 +69,28 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["cells",
 
 
 def flagged(run_dir: Path) -> dict[int, dict]:
-    """Deals with at least one cell not accepted, or a buyer not accepted: {row_id: {'cells': [...], 'party': {...}}}."""
+    """Rows with at least one cell not accepted, or a buyer not accepted, keyed by (deal id, project): a deal over
+    several projects has one row per project. {(row_id, project): {'cells': [...], 'party': {...}}}."""
     out: dict[int, dict] = {}
     for line in (run_dir / "cells.jsonl").read_text().splitlines():
         cell = json.loads(line)
         if cell["action"] != "accept":
-            out.setdefault(cell["row_id"], {"cells": [], "party": None})["cells"].append(cell)
+            out.setdefault((cell["row_id"], cell["project"]), {"cells": [], "party": None})["cells"].append(cell)
     for line in (run_dir / "parties.jsonl").read_text().splitlines():
         party = json.loads(line)
+        key = (party["row_id"], party["project"])
         if party.get("action") in ("review", "correct"):
-            out.setdefault(party["row_id"], {"cells": [], "party": None})["party"] = party
-        elif party["row_id"] in out:
-            out[party["row_id"]]["party"] = party
+            out.setdefault(key, {"cells": [], "party": None})["party"] = party
+        elif key in out:
+            out[key]["party"] = party
     return out
 
 
-def document(run_dir: Path, row_id: int) -> tuple[str, str]:
+def document(run_dir: Path, key: tuple[int, str]) -> tuple[str, str]:
     """(project name, document text as the pipeline read it, cut at MAX_DOCUMENT_CHARS with a note)."""
-    entry = next(e for e in json.loads((run_dir / "run_report.json").read_text()) if e["id"] == row_id)
+    row_id, project = key
+    entries = [e for e in json.loads((run_dir / "run_report.json").read_text()) if e["id"] == row_id]
+    entry = next((e for e in entries if e.get("project_name") == project), entries[0])
     raw, _ = pdf_text(Path(entry["source_url"].removeprefix("file://")).read_bytes())
     text = " ".join(raw.split())
     if len(text) > MAX_DOCUMENT_CHARS:
@@ -114,8 +120,8 @@ def tokens(text: str) -> int:
 def estimate(run_dir: Path) -> dict:
     flags = flagged(run_dir)
     total_in = 0
-    for row_id, f in flags.items():
-        project, text = document(run_dir, row_id)
+    for key, f in flags.items():
+        project, text = document(run_dir, key)
         total_in += tokens(RULES) + tokens(prompt(project, f, text))
     return {"deals": len(flags), "cells": sum(len(f["cells"]) for f in flags.values()), "input_tokens": total_in}
 
@@ -193,8 +199,9 @@ def ask_model(project: str, flags: dict, text: str, call=claude_code) -> tuple[d
 
 def run(run_dir: Path, call=claude_code) -> list[dict]:
     results = []
-    for row_id, flags in flagged(run_dir).items():
-        project, text = document(run_dir, row_id)
+    for key, flags in flagged(run_dir).items():
+        row_id = key[0]
+        project, text = document(run_dir, key)
         answer, usage = ask_model(project, flags, text, call)
         results.append({"row_id": row_id, "project": project, "usage": usage, **check_answer(answer, text)})
     return results
