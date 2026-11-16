@@ -155,6 +155,38 @@ Details that turned out to matter on real announcements, each pinned by a test:
 
 `DERIVED` is a plausibility test, not a proof, and the eval reports it separately from `FOUND`.
 
+## Verifying every value: code, then Jev, then Opus
+
+The validator above only asks "is this number written in the article?". A number can be written and still be the
+wrong thing: a share count stored as cash, an older deal's price, the seller stored as the buyer. Checking meaning
+is a judgment, so it goes to models, but only as far as needed, each tier settling what the cheaper one could not:
+
+```mermaid
+flowchart LR
+    C["Code<br/>finds every place a value is written,<br/>does all arithmetic,<br/>looks up the market price"] -->|"meaning?"| J{{"Jev decision model<br/>closed questions with probabilities:<br/>is this value this field? is this company the buyer?<br/>~0.00004 USD a question"}}
+    J -->|"P &ge; 0.8"| A(["accepted"])
+    J -->|"unsure"| O["Opus<br/>reads the whole document for the flagged deals only,<br/>answers with a quote per value"]
+    O --> Q{"Code checks Opus:<br/>quote in the document?<br/>value in the quote or by a rule?"}
+    Q -->|"yes"| A2(["verified or corrected"])
+    Q -->|"no"| R(["review queue"])
+```
+
+On a 30-deal sample of the client analyst's own deals, replayed through the production `run()`
+([`evals/end_to_end.py`](evals/end_to_end.py), 8 deals at a time): 161 stored cells, of which **82 were settled
+by Jev, 43 by Opus with a quote code confirmed, 5 by the market price, and 31 left for review**. Jev cost under
+0.01 USD for the run; Opus read 26 of the 41 stored rows. Jev turned out to be reliable when it accepts and too
+strict when it flags (it distrusts "100% interest"), which is why it is a filter in front of Opus, not a judge.
+The buyer question runs in production too ([`pipeline/buyer.py`](pipeline/buyer.py)): an owner Jev scores
+below 0.5 is withheld for review instead of stored.
+
+**The checks were themselves reviewed.** An adversarial reviewer agent
+([`.claude/agents/pipeline-critic.md`](.claude/agents/pipeline-critic.md)) audits each end-to-end run from its own
+git worktree, reading the run report, spans and source documents, and reports bugs with a failing test.
+Round 1 found 15 (among them "1m @ 6.15 g/t" read as one million, a failed model call reported as a real "no",
+and a deal over two projects stored as one row); round 2 found 13 more, several in the fixes of round 1. Every
+finding is a test in [`tests/test_critic_findings.py`](tests/test_critic_findings.py) and
+[`tests/test_critic_round2.py`](tests/test_critic_round2.py).
+
 ## Measured results
 
 `python -m evals.run_eval score --model gpt-6.1-terra --retry` runs the production prompt on 33 saved press
