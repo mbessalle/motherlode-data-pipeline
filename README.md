@@ -18,8 +18,10 @@ every step is traced.
 | **Evals** | 33 real press releases: **94% of extracted numbers are supported by the source**, and 86 of 109 values agree with a human analyst |
 | **Pydantic** | Typed schema for every model reply: types, ranges, ISO currencies, dates; a reply that breaks it is not written |
 | **Value verification** | Every stored value checked for meaning in three tiers: code (exact), the Jev decision model (closed questions with probabilities), Opus only for what stays uncertain, with its quotes checked by code. [Details](#verifying-every-value-code-then-jev-then-opus) |
+| **Production data corrected** | All 1,305 stored deals re-checked against their sources: **184 values corrected in the client's tables**, 422 proposals held back by coded client rules, every change backed up and read back. [Details](#correcting-the-production-tables) |
+| **Built not to hang** | Each job in its own process with a 30 s limit, a stall alarm, and parallel model calls capped by free memory |
 | **Adversarial review agent** | A critic agent audits each end-to-end run from its own git worktree; two rounds found 28 bugs, each now a test |
-| **Deterministic validation** | Unit-aware grounding of every number; 140 offline tests; CI on every push |
+| **Deterministic validation** | Unit-aware grounding of every number; 145 offline tests; CI on every push |
 | **Measured model choice** | A decision-model API benchmarked against chat calls on accuracy, latency and cost before deciding |
 | **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
 
@@ -214,6 +216,53 @@ and a deal over two projects stored as one row); round 2 found 13 more, several 
 finding is a test in [`tests/test_critic_findings.py`](tests/test_critic_findings.py) and
 [`tests/test_critic_round2.py`](tests/test_critic_round2.py).
 
+## Correcting the production tables
+
+The same three tiers were then run on the rows already in the client's database, which an analyst entered by hand
+over two years ([`evals/check_db.py`](evals/check_db.py)). A check that only writes a report changes nothing, so
+this one ends in the tables, under strict conditions.
+
+```mermaid
+flowchart LR
+    X["1,305 stored rows<br/>(read-only export)"] --> D["Find each row's source:<br/>client PDF, public link,<br/>or search + identity test"]
+    D -->|"742 with a source"| C["Code + Jev<br/>34 seconds"]
+    C -->|"615 rows unsure"| O["Opus on the<br/>Claude subscription"]
+    O -->|"579 proposed"| H{"Coded client rules"}
+    H -->|"157 + 27 tickers"| W[("Backup, one transaction,<br/>read back")]
+    H -->|"422"| R(["held for the client,<br/>with the reason"])
+```
+
+| Step | Result |
+|---|---|
+| Rows in the tables | 1,305 in seven regional tables |
+| Source document found | 742: the client's PDFs, the public link, or the announcement found by search and accepted by the identity test. 563 had none and were left as they are |
+| Settled by code and Jev | 1,182 values, in 34 seconds for all rows; about 0.20 USD of Jev calls for the whole check |
+| Sent to Opus | 615 rows, on the Claude subscription (`claude -p`), no API charge |
+| Corrections Opus proposed with a quote code confirmed | 579 |
+| Held back by coded client rules | **422**: 247 would blank a value, 111 are amounts in rows whose currency is unclear, 22 are share prices or values the client takes from the market, 29 are totals that include shares at market value, 13 differ only by the analyst's AUD to USD conversion at 0.67 |
+| Written | **157 corrections in 140 rows, then 27 buyer tickers read from the announcements**: 57 owners (the seller had been stored as the buyer), 34 areas, 28 share counts, 17 interests, 11 royalties, 10 amounts |
+| Safety | Each changed table copied to a backup table first; all changes in one transaction that fails if a stored value changed since the export; all 184 read back from the database |
+
+Examples, all from public announcements:
+
+| Deal | Field | Was | Now | Evidence |
+|---|---|---|---|---|
+| Liverpool (Boss Energy option) | `owner_name` | Eclipse Metals (the vendor) | Boss Energy | "granted Boss Energy the option to earn up to an 80% interest" |
+| Henty (Kaiser Reef buys from Catalyst) | `nsr_percent` | 5 | 0.5 | "0.5% NSR royalty on gold produced from the Darwin Extension" |
+| Fraser Range | `nsr_percent` | 5 | 0.5 | the 5 was the dilution threshold: "into a 0.5% NSR royalty where a party's interest dilutes below 5%" |
+| Lord Baron | `project_area` | 5,650 ha | 6,400 ha | "for an area of 6,400ha" (5,650 was the area before staking) |
+
+The model proposes; code decides what may change. Opus was right about meaning far more often than it was
+right about the client's conventions: it would have blanked 247 values because "the share price is not in the
+document", while the client's rule is that share prices come from the market. Those rules are now code
+(`hold_reason` in [`evals/check_db.py`](evals/check_db.py)) with tests, not prompt text.
+
+**Long runs fail loudly, not silently.** The first full check hung on one document with no warning. Every
+document lookup and row check now runs in its own process with a 30-second limit, and the run stops with
+`STALLED` if nothing finishes for 30 seconds ([`evals/limits.py`](evals/limits.py)). Raising Opus to 26 parallel
+calls froze a 14 GB laptop, so the number of parallel `claude -p` processes is now capped by free memory, and a
+failed call skips its row instead of stopping the run.
+
 ## Measured results
 
 `python -m evals.run_eval score --model gpt-6.1-terra --retry` runs the production prompt on 33 saved press
@@ -317,7 +366,7 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 140 tests, offline: no API key, database or network needed
+pytest                      # 145 tests, offline: no API key, database or network needed
 pip install ".[ocr]"        # optional: read scanned PDFs (RapidOCR, local, no system package)
 ruff check .
 
@@ -333,6 +382,15 @@ in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Each run writes `run_
 outcome, extraction, validation report, withheld values) and uploads it with the review queue as an artifact.
 A manual run takes `max_articles` to process only a few deal candidates; the rest are picked up by the next run.
 
+
+Correcting stored rows (local, database settings in `.env` as one `DATABASE_URL` line):
+
+```bash
+python -m evals.check_db check EXPORT RUN_DIR          # code and Jev on every row with a source
+python -m evals.escalate run RUN_DIR                   # Opus on the subscription, for the uncertain rows
+python -m evals.check_db corrections EXPORT RUN_DIR    # corrections.jsonl and held.jsonl, with reasons
+python -m evals.check_db apply EXPORT RUN_DIR          # backup tables, then one transaction
+```
 
 ## Layout
 
@@ -353,6 +411,8 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 | [`evals/`](evals/) | Eval cases, runner and results |
 | [`evals/end_to_end.py`](evals/end_to_end.py) | Replays a sample of the analyst's deals through the production `run()` |
 | [`evals/cell_check.py`](evals/cell_check.py), [`evals/escalate.py`](evals/escalate.py), [`evals/apply_checks.py`](evals/apply_checks.py) | The three-tier value check: code, then Jev, then Opus for what stays uncertain |
+| [`evals/check_db.py`](evals/check_db.py) | Checks the stored rows against their sources, holds risky corrections, applies the rest with a backup |
+| [`evals/limits.py`](evals/limits.py) | Runs slow jobs with a per-job time limit and a stall alarm |
 | [`.claude/agents/pipeline-critic.md`](.claude/agents/pipeline-critic.md) | The adversarial reviewer that audits each end-to-end run in its own worktree |
 | [`tools/integrity_checks.sql`](tools/integrity_checks.sql) | Read-only checks for the tables themselves |
 | [`docs/extraction-rules/`](docs/extraction-rules/) | The domain rules behind the prompt, written on ~700 historical transactions |
@@ -388,6 +448,8 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
   accepted source. The identity test prefers missing a deal to writing the wrong one.
 - The listing gives only a headline, a date and a company, and its headlines are its own wording, so the
   project name comes from the model and is checked against the announcement.
+- 563 of the 1,305 stored rows could not be checked: their only link is a news aggregator's summary, and no original announcement passed the identity test. They keep the analyst's values.
+- In rows whose owner was corrected, the market cap is still the seller's until the client decides how to fill it.
 - Discovery depends on one third-party sitemap; a change there stops new articles, and the run fails loudly.
 - OCR was checked on one scanned announcement (a digital release rendered to images): all 26 numbers in its
   text were read, but some spaces between words were lost. OCR lines are joined top to bottom, so a page with

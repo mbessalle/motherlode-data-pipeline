@@ -36,14 +36,26 @@ class Settings:
         return all([self.db_user, self.db_password, self.db_host, self.db_port, self.db_name])
 
 
+def database_from_url(url: str | None) -> dict:
+    """user, password, host, port, dbname from a postgresql:// connection string (Supabase "Connect"); {} if none."""
+    if not url:
+        return {}
+    from urllib.parse import unquote, urlparse
+
+    parts = urlparse(url)
+    return {"user": unquote(parts.username or ""), "password": unquote(parts.password or ""), "host": parts.hostname,
+            "port": str(parts.port or 5432), "dbname": (parts.path or "/postgres").lstrip("/") or "postgres"}
+
+
 def load() -> Settings:
     load_dotenv()
+    url = database_from_url(os.getenv("DATABASE_URL"))     # one line instead of five; the separate names still work
     return Settings(
-        db_user=os.getenv("user"),
-        db_password=os.getenv("password"),
-        db_host=os.getenv("host"),
-        db_port=os.getenv("port"),
-        db_name=os.getenv("dbname"),
+        db_user=os.getenv("user") or url.get("user"),
+        db_password=os.getenv("password") or url.get("password"),
+        db_host=os.getenv("host") or url.get("host"),
+        db_port=os.getenv("port") or url.get("port"),
+        db_name=os.getenv("dbname") or url.get("dbname"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         extract_model=os.getenv("EXTRACT_MODEL", "gpt-6.1-terra"),
         classify_model=os.getenv("CLASSIFY_MODEL", "gpt-6-luna"),

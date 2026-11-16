@@ -183,3 +183,10 @@ def test_a_list_of_projects_without_a_group_name_is_one_row_each():
     stop, details = run.prepare(article, searcher, triage)
     assert stop is None and article["projects"] == ["Telfer", "Havieron"]
     assert article["project_name"] == "Telfer and Havieron"
+
+
+def test_a_connection_string_gives_the_database_settings():
+    from pipeline.config import database_from_url
+    assert database_from_url("postgresql://postgres.abc:p%40ss@aws-0-eu.pooler.supabase.com:6543/postgres") == {
+        "user": "postgres.abc", "password": "p@ss", "host": "aws-0-eu.pooler.supabase.com", "port": "6543", "dbname": "postgres"}
+    assert database_from_url(None) == {}
