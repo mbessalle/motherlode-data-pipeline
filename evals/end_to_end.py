@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import dataclasses
 import datetime as dt
 import hashlib
 import io
@@ -49,7 +50,9 @@ import json
 import os
 import random
 import sys
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -155,12 +158,14 @@ class CachedClient:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
         self.cached, self.paid, self.tokens = 0, 0, Counter()
+        self.lock = threading.Lock()                 # the replay runs several deals at once
 
     def create(self, **request):
         key = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()[:32]
         path = self.cache_dir / f"{key}.json"
         if path.exists():
-            self.cached += 1
+            with self.lock:
+                self.cached += 1
             saved = json.loads(path.read_text())
         else:
             if self.inner is None:
@@ -170,10 +175,11 @@ class CachedClient:
             saved = {"model": response.model, "content": response.choices[0].message.content,
                      "usage": {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens} if usage else None}
             path.write_text(json.dumps(saved, ensure_ascii=False, indent=1))
-            self.paid += 1
-            if usage:
-                self.tokens[(request["model"], "in")] += usage.prompt_tokens
-                self.tokens[(request["model"], "out")] += usage.completion_tokens
+            with self.lock:
+                self.paid += 1
+                if usage:
+                    self.tokens[(request["model"], "in")] += usage.prompt_tokens
+                    self.tokens[(request["model"], "out")] += usage.completion_tokens
         return SimpleNamespace(model=saved["model"], choices=[SimpleNamespace(message=SimpleNamespace(content=saved["content"]))],
                                usage=SimpleNamespace(**saved["usage"]) if saved["usage"] else None)
 
@@ -301,8 +307,23 @@ def run_sample(args, inner=None) -> Path:
                 gates.enter_context(mock.patch("pipeline.sources.looks_like_a_deal", lambda title: True))
             if args.no_date_check:
                 gates.enter_context(mock.patch("pipeline.search.dated_near", lambda text, listed: True))
-            # newest first, as the sitemap gives them; run() treats every entry as new (no state file here)
-            run(settings, store=store, client=client, searcher=LocalSearcher(pdf_of), fetch=lambda: feed[::-1])
+            # One production run() per deal, args.workers at a time (each run is mostly waiting on the model); the
+            # deals share the store and the reply cache, and each writes its own report part, merged in sample order.
+            parts = out / "parts"
+            parts.mkdir(exist_ok=True)
+
+            def one(entry: dict) -> None:
+                mine = dataclasses.replace(settings, run_report_path=str(parts / f"{entry['id']}.json"),
+                                           review_queue_path=str(parts / f"{entry['id']}.review.jsonl"))
+                run(mine, store=store, client=client, searcher=LocalSearcher(pdf_of), fetch=lambda: [entry])
+
+            with ThreadPoolExecutor(args.workers) as pool:
+                list(pool.map(one, feed))
+            merged = [e for entry in feed for e in json.loads((parts / f"{entry['id']}.json").read_text())
+                      if (parts / f"{entry['id']}.json").exists()]
+            (out / "run_report.json").write_text(json.dumps(merged, indent=1, default=str))
+            (out / "review_queue.jsonl").write_text("".join(
+                (parts / f"{e['id']}.review.jsonl").read_text() for e in feed if (parts / f"{e['id']}.review.jsonl").exists()))
     finally:
         os.chdir(here)
         telemetry.shutdown()
@@ -358,6 +379,7 @@ def main(argv=None) -> None:
     parser.add_argument("--replies", type=Path, help="cache folder for model replies (default evals/.cache/e2e/replies)")
     parser.add_argument("--model", default="gpt-6.1-terra")
     parser.add_argument("--classify-model", default="gpt-6-luna")
+    parser.add_argument("--workers", type=int, default=8, help="deals replayed at once (default 8)")
     parser.add_argument("--openrouter", action="store_true",
                         help="send the model calls through OpenRouter (OPENROUTER_API_KEY), same models and prices")
     parser.add_argument("--no-headline-filter", action="store_true")

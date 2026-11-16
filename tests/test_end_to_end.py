@@ -58,7 +58,7 @@ def inputs(tmp_path, monkeypatch):
     return argparse.Namespace(sample=30, seed=1, cases=tmp_path / "cases.jsonl", rows=tmp_path / "rows.csv",
                               pdfs=tmp_path / "pdfs", out=tmp_path / "out", replies=tmp_path / "replies",
                               model="gpt-6.1-terra", classify_model="gpt-6-luna",
-                              no_headline_filter=False, no_date_check=False, openrouter=False)
+                              no_headline_filter=False, no_date_check=False, openrouter=False, workers=4)
 
 
 def test_a_sampled_deal_runs_end_to_end_and_is_compared_with_the_analyst(inputs):
