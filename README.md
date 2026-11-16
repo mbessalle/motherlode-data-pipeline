@@ -25,6 +25,12 @@ every step is traced.
 | **Measured model choice** | A decision-model API benchmarked against chat calls on accuracy, latency and cost before deciding |
 | **Runs in production** | GitHub Actions on a schedule, writing to Postgres (Supabase) |
 
+**Result in production:** the pipeline re-checked every row already in the client's database and corrected 184
+values, each against a quote from the source announcement. Queried live from Postgres, before (backup table) and
+after (live table):
+
+![Corrections in the production database: before and after](docs/img/production-corrections.png)
+
 ## A real run, traced
 
 One run of the pipeline, viewed in [Jaeger](https://www.jaegertracing.io/): for each headline, find the announcement, screen it,
@@ -243,7 +249,7 @@ flowchart LR
 | Written | **157 corrections in 140 rows, then 27 buyer tickers read from the announcements**: 57 owners (the seller had been stored as the buyer), 34 areas, 28 share counts, 17 interests, 11 royalties, 10 amounts |
 | Safety | Each changed table copied to a backup table first; all changes in one transaction that fails if a stored value changed since the export; all 184 read back from the database |
 
-Examples, all from public announcements:
+The image at the top of this page is rendered from a live read-only query ([`tools/corrections_image.py`](tools/corrections_image.py)). Evidence for a few, all from public announcements:
 
 | Deal | Field | Was | Now | Evidence |
 |---|---|---|---|---|
@@ -414,6 +420,7 @@ python -m evals.check_db apply EXPORT RUN_DIR          # backup tables, then one
 | [`evals/check_db.py`](evals/check_db.py) | Checks the stored rows against their sources, holds risky corrections, applies the rest with a backup |
 | [`evals/limits.py`](evals/limits.py) | Runs slow jobs with a per-job time limit and a stall alarm |
 | [`.claude/agents/pipeline-critic.md`](.claude/agents/pipeline-critic.md) | The adversarial reviewer that audits each end-to-end run in its own worktree |
+| [`tools/corrections_image.py`](tools/corrections_image.py) | Renders the before/after image from a live read-only query of the backup and live tables |
 | [`tools/integrity_checks.sql`](tools/integrity_checks.sql) | Read-only checks for the tables themselves |
 | [`docs/extraction-rules/`](docs/extraction-rules/) | The domain rules behind the prompt, written on ~700 historical transactions |
 | [`tests/`](tests/) | Validator rules, every exit of the graph, the search identity test, the run end to end |

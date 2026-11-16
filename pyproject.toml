@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=9", "ruff>=0.17"]
 ocr = ["rapidocr>=3.10", "onnxruntime>=1.20", "pypdfium2>=5"]   # scanned PDFs; about 31 MB of models on first use
+docs = ["matplotlib>=3.9"]   # tools/corrections_image.py
 market = ["yfinance>=1.6"]   # the buyer's close on the news date, for a share price the announcement does not state
 
 [tool.setuptools.packages.find]
