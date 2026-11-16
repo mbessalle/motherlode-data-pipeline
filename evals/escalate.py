@@ -28,8 +28,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from evals.documents import document_text
 from pipeline import telemetry, validate
-from pipeline.pdf import pdf_text
 from pipeline.search import company_words
 from pipeline.validate import to_number
 
@@ -91,8 +91,7 @@ def document(run_dir: Path, key: tuple[int, str]) -> tuple[str, str]:
     row_id, project = key
     entries = [e for e in json.loads((run_dir / "run_report.json").read_text()) if e["id"] == row_id]
     entry = next((e for e in entries if e.get("project_name") == project), entries[0])
-    raw, _ = pdf_text(Path(entry["source_url"].removeprefix("file://")).read_bytes())
-    text = " ".join(raw.split())
+    text = document_text(entry["source_url"])   # cached: OCR once per document
     if len(text) > MAX_DOCUMENT_CHARS:
         text = text[:MAX_DOCUMENT_CHARS] + f" [... document cut here: {len(text):,} characters in all]"
     return entry.get("project_name") or "", text

@@ -34,10 +34,10 @@ from collections import Counter
 from pathlib import Path
 
 from evals import end_to_end, jev
+from evals.documents import document_text
 from evals.jev_verify import DEAL_TYPE, FIELDS, PROJECT, TICKER, ask, passage, sentence_window
 from pipeline import market, telemetry
 from pipeline.buyer import BUYER, ROLE, party_passage
-from pipeline.pdf import pdf_text
 from pipeline.search import company_words
 from pipeline.validate import (
     _CURRENCY_BEFORE,
@@ -405,8 +405,7 @@ def check_run(run_dir: Path, rows_path: Path = end_to_end.DEFAULT_ROWS) -> tuple
     for entry in json.loads((run_dir / "run_report.json").read_text()):
         if not entry.get("validation"):
             continue
-        raw, _ = pdf_text(Path(entry["source_url"].removeprefix("file://")).read_bytes())
-        text = " ".join(raw.split())
+        text = document_text(entry["source_url"])   # cached: OCR once per document
         extraction = {**(entry.get("extraction") or {}), **(entry.get("withheld") or {})}   # withheld values are checked too
         project = entry.get("project_name") or ""
         row = rows.get(entry["id"], {})

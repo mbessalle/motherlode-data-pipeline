@@ -27,9 +27,9 @@ from collections import Counter
 from pathlib import Path
 
 from evals import end_to_end, jev
+from evals.documents import document_text
 from pipeline import telemetry
 from pipeline.buyer import BUYER, ROLE, deal_passage  # noqa: F401  (re-exported for cell_check)
-from pipeline.pdf import pdf_text
 from pipeline.search import company_words
 from pipeline.validate import DERIVED, FIELD_KIND, FOUND, PERCENT_FIELDS, find_number, to_number
 
@@ -245,8 +245,7 @@ def verify(run_dir: Path, cases_path: Path = end_to_end.DEFAULT_CASES, rows_path
             continue
         case = by_row[entry["id"]]
         # The document the pipeline accepted, read the same way (search.py joins the text on single spaces).
-        raw, _ = pdf_text(Path(entry["source_url"].removeprefix("file://")).read_bytes())
-        text = " ".join(raw.split())
+        text = document_text(entry["source_url"])   # cached: OCR once per document
         verdicts += check_parties(case, entry, rows[entry["id"]], text)
         project = entry.get("project_name") or case.get("project_name") or ""
         extraction = entry.get("extraction") or {}
