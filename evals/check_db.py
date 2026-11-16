@@ -174,8 +174,48 @@ def corrections(export_path: Path, run_dir: Path) -> list[dict]:
             out.append({"table": table, "id": row["id"], "project": row.get("project_name"), "field": "owner_name",
                         "old": row.get("owner_name"), "new": buyer["name"], "evidence": buyer["quote"],
                         "reason": buyer.get("reason"), "decided_by": "opus, quote confirmed"})
+    # Some rows hold amounts converted to USD at 0.67, others the announcement's own currency. A money correction
+    # (taken from the announcement) is safe only where another amount in the same row matches the text as stated.
+    as_stated = set()
+    cells_path = run_dir / "cells.jsonl"
+    if cells_path.exists():
+        for line in cells_path.read_text().splitlines():
+            cell = json.loads(line)
+            if cell.get("field") in MONEY and cell.get("action") == "accept" and cell.get("source") == "stated":
+                as_stated.add(cell["row_id"])
+    for c in out:
+        c["row_in_source_currency"] = f"{c['table']}:{c['id']}" in as_stated
+    for c in out:                      # the client's aggregate includes shares at market value, which the text lacks
+        row = rows[f"{c['table']}:{c['id']}"][1]
+        c["row_has_shares"] = bool(to_number(row.get("shares_value")) or to_number(row.get("shares_amount")))
+    held = [dict(c, held_because=why) for c in out if (why := hold_reason(c))]
+    out = [c for c in out if not hold_reason(c)]
     (run_dir / "corrections.jsonl").write_text("".join(json.dumps(c, default=str) + "\n" for c in out))
+    (run_dir / "held.jsonl").write_text("".join(json.dumps(c, default=str) + "\n" for c in held))
     return out
+
+
+MONEY = ("aggregate_deal_value", "cash_payments_value", "exp_comit_value", "shares_value", "drilling_value")
+
+
+def hold_reason(fix: dict) -> str | None:
+    """A correction that needs the client, not a model: blanking a value (the client's share prices come from market
+    data, not the text), or a change that is only an exchange rate (the analyst's figure is the source amount
+    converted to another currency)."""
+    if fix["new"] in (None, ""):
+        return "blanks a value"
+    if fix["field"] in ("share_price", "shares_value"):
+        return "the client prices shares at market on the news date, not from the text"
+    if fix["field"] == "aggregate_deal_value" and fix.get("row_has_shares"):
+        return "the aggregate includes shares at market value, which the text does not give"
+    if fix["field"] in MONEY and not fix.get("row_in_source_currency", True):
+        return "the row's currency is unclear: no other amount in it matches the announcement as stated"
+    if fix["field"] == "owner_name":
+        return None
+    old, new = to_number(fix["old"]), to_number(fix["new"])
+    if old and new and 0.6 <= old / new <= 0.8:
+        return "differs only by an exchange rate"
+    return None
 
 
 def apply(export_path: Path, run_dir: Path) -> None:

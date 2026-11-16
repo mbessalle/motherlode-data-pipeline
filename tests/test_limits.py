@@ -32,3 +32,11 @@ def test_parallel_opus_calls_are_capped_by_free_memory():
     assert safe_parallel(26, available_mb=11000) == 8      # the 14 GB laptop that froze at 26
     assert safe_parallel(4, available_mb=11000) == 4
     assert safe_parallel(26, available_mb=300) == 1
+
+
+def test_blanking_and_exchange_rate_corrections_are_held_for_the_client():
+    from evals.check_db import hold_reason
+    assert hold_reason({"field": "shares_value", "old": 70000, "new": None}) == "blanks a value"
+    assert hold_reason({"field": "cash_payments_value", "old": 301500, "new": 450000}) == "differs only by an exchange rate"
+    assert hold_reason({"field": "nsr_percent", "old": 5, "new": 0.5}) is None
+    assert hold_reason({"field": "owner_name", "old": "Eclipse", "new": "Boss Energy"}) is None
