@@ -36,6 +36,7 @@ class ArticleState(TypedDict, total=False):
     attempts: int
     withheld: dict           # values removed before writing
     outcome: str             # how the article left the graph
+    retry_failed: bool       # the corrected retry returned nothing: the first attempt is quarantined and kept
 
 
 @dataclass
@@ -72,16 +73,26 @@ def build_graph(deps: Deps):
 
     def extract(state: ArticleState) -> dict:
         attempts = state.get("attempts", 0) + 1
-        with telemetry.span("extract", **{"pipeline.extract.attempt": attempts, "pipeline.extract.is_retry": attempts > 1}):
+        with telemetry.span("extract", **{"pipeline.extract.attempt": attempts, "pipeline.extract.is_retry": attempts > 1}) as s:
             extraction = deps.extract(state["text"], state["record"], state.get("feedback"))
+            failed = extraction.pop("_error", None) if isinstance(extraction, dict) else None
+            if failed:
+                s.set_attribute("error.type", failed)
         filled = sum(1 for value in extraction.values() if value not in (None, ""))
-        telemetry.progress(state["article"].get("id"), "extract", f"attempt {attempts}: {filled} fields filled"
+        telemetry.progress(state["article"].get("id"), "extract", f"attempt {attempts}: "
+                           + (f"call failed ({failed})" if failed else f"{filled} fields filled")
                            + (" (retry with feedback)" if attempts > 1 else ""))
-        return {"extraction": extraction, "attempts": attempts} if extraction else {"attempts": attempts, "outcome": "no_data"}
+        if extraction:
+            return {"extraction": extraction, "attempts": attempts}
+        if attempts > 1:
+            # A failed or empty retry keeps the first attempt: its supported values are written and the rest
+            # withheld, instead of losing the whole row (critic F3).
+            return {"attempts": attempts, "retry_failed": True}
+        return {"attempts": attempts, "outcome": "extract_failed" if failed else "no_data"}
 
     def check(state: ArticleState) -> dict:
         with telemetry.span("validate") as s:
-            report = validate(state["extraction"], state["text"])
+            report = validate(state["extraction"], state["text"], state["article"].get("project_count", 1))
             s.set_attribute("pipeline.validate.checked", report.checked)
             s.set_attribute("pipeline.validate.grounded", report.grounded)
             s.set_attribute("pipeline.validate.not_found", ",".join(report.not_found))
@@ -139,7 +150,12 @@ def build_graph(deps: Deps):
     graph.add_edge(START, "resolve")
     graph.add_conditional_edges("resolve", after("scrape"), ["scrape", END])
     graph.add_conditional_edges("scrape", after("extract"), ["extract", END])
-    graph.add_conditional_edges("extract", after("validate"), ["validate", END])
+    def after_extract(state: ArticleState) -> str:
+        if state.get("outcome"):
+            return END
+        return "quarantine" if state.get("retry_failed") else "validate"
+
+    graph.add_conditional_edges("extract", after_extract, ["validate", "quarantine", END])
     graph.add_conditional_edges("validate", after_check, ["store", "extract", "quarantine"])
     graph.add_conditional_edges("quarantine", after("store"), ["store", END])
     graph.add_edge("store", END)

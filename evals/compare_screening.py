@@ -12,6 +12,7 @@ Replies are cached, so re-scoring costs nothing; delete evals/.cache/screening/r
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import statistics
@@ -120,6 +121,15 @@ def summarise(name: str, cases: list[dict], results: list[dict]) -> dict:
     }
 
 
+# Replies are cached per prompt version: a changed triage prompt is measured again, never read from old replies.
+CHAT_CACHE = f"chat-{hashlib.sha256(llm.TRIAGE_SYSTEM_PROMPT.encode()).hexdigest()[:8]}"
+
+
+def chat_model(settings) -> str:
+    has_openai = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
+    return settings.classify_model if has_openai else f"openai/{settings.classify_model}"
+
+
 class LazyOpenAI:
     """The OpenAI client, created on first use: re-scoring from cached replies needs no key."""
 
@@ -131,7 +141,10 @@ class LazyOpenAI:
         if self._client is None:
             import openai
 
-            self._client = openai.OpenAI(api_key=config.load().openai_api_key or os.environ["OPENAI_API_KEY"])
+            key = config.load().openai_api_key or os.getenv("OPENAI_API_KEY")
+            # without an OpenAI key, the same model through OpenRouter (same price); see chat_model()
+            self._client = openai.OpenAI(api_key=key) if key else openai.OpenAI(
+                base_url="https://openrouter.ai/api/v1", api_key=os.environ["OPENROUTER_API_KEY"])
         return self._client.chat
 
 
@@ -172,7 +185,7 @@ def main() -> None:
     chat, decide, jevs = [], [], []
     for case in cases:
         text = (CACHE / f"{case['id']}.txt").read_text()
-        chat.append(cached("chat", case, lambda c=case, t=text: run_chat(client, settings.classify_model, c, t)))
+        chat.append(cached(CHAT_CACHE, case, lambda c=case, t=text: run_chat(client, chat_model(settings), c, t)))
         decide.append(cached("decisions", case, lambda c=case, t=text: run_decisions(
             settings.openai_api_key or os.environ["OPENAI_API_KEY"], c, t)))
         jevs.append(cached(f"jev-{jev.MODEL.replace('/', '_')}", case, lambda c=case, t=text: run_jev(c, t)))

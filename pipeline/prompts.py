@@ -114,5 +114,9 @@ Respond with a single JSON object with exactly these keys:
   as the announcement writes it, without commodity words and without "Project", "Property", "Mine", "Deposit" or
   "Claims" (for example "Big Onion", not "Big Onion copper-molybdenum property"). If the transaction covers a list
   of properties, give the name the announcement uses for the group, or null if it has none. null if there is no project.
+- "projects": a list of the separate projects or properties the transaction covers, each written the same way, one
+  entry per project that would get its own database row (for example ["Telfer", "Havieron"] for "the Telfer mine and
+  the Havieron project"). One entry when the transaction covers one project, even if its name contains "and"
+  ("Lord and Lady Hill"). An empty list if there is no project.
 - "reason": one short sentence
 """

@@ -202,13 +202,14 @@ def compare(case: dict, row: dict, entry: dict | None, stored: dict | None) -> l
 
 def summary_text(seed: int, cases: list[dict], report: list[dict], comparison: list[dict], client: CachedClient) -> str:
     outcomes = Counter(e["outcome"] for e in report)
+    reached = len({e["id"] for e in report})          # a deal over several projects has one entry per project
     verdicts = Counter((c["verdict"], c["in_document"] != "no") for c in comparison)
     by_field = {}
     for c in comparison:
         by_field.setdefault(c["field"], Counter())[c["verdict"]] += 1
     out = [f"# End-to-end sample: seed {seed}, {len(cases)} cases\n", "## How each entry left the pipeline\n",
            *[f"- {name}: {count}" for name, count in outcomes.most_common()],
-           f"- not reached (dropped before search, e.g. by the headline filter): {len(cases) - len(report)}", "",
+           f"- not reached (dropped before search, e.g. by the headline filter): {len(cases) - reached}", "",
            "## Stored values against the analyst's\n", "| Field | Agree | Disagree | Pipeline only | Analyst only |",
            "|---|---|---|---|---|",
            *[f"| `{f}` | {v['agree']} | {v['disagree']} | {v['pipeline_only']} | {v['analyst_only']} |" for f, v in by_field.items()], "",
@@ -291,10 +292,15 @@ def run_sample(args, inner=None) -> Path:
     (out / "stored.json").write_text(json.dumps(store.tables, indent=1, default=str))
 
     report = json.loads((out / "run_report.json").read_text()) if (out / "run_report.json").exists() else []
-    by_id = {e["id"]: e for e in report}
+    by_id: dict = {}
+    for e in report:                                  # a deal over several projects has one entry per project
+        by_id.setdefault(e["id"], []).append(e)
     comparison = []
     for case in cases:
-        entry = by_id.get(case["row_id"])
+        entries = by_id.get(case["row_id"], [])
+        analyst_project = (rows[case["row_id"]].get("project_name") or "").lower()
+        entry = next((e for e in entries if (e.get("project_name") or "").lower() in analyst_project
+                      or analyst_project in (e.get("project_name") or "").lower()), entries[0] if entries else None)
         stored = None
         if entry and entry.get("table"):
             stored = store.fetch_record(entry["table"], entry.get("project_name"))

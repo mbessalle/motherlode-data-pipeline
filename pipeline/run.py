@@ -55,13 +55,30 @@ def prepare(article: dict, searcher, triage) -> tuple[str | None, dict]:
     details["source_url"] = source.url
     verdict = triage(article["title"], article["company"], source.text)
     details["triage"] = verdict
+    if verdict.get("error"):
+        return "triage_failed", details              # not a "no": the run stops here and the next run retries it
     if not verdict["is_project_deal"]:
         return "not_a_project_deal", details
-    if not named_in(source.text, verdict["project_name"] or ""):
+    if not verdict["project_name"]:
+        return "no_single_project", details          # a deal over a group of properties with no single name
+    projects = project_parts(verdict, source.text)
+    details["projects_checked"] = projects
+    if not projects:
         return "project_name_not_in_source", details
-    article.update(project_name=verdict["project_name"], link=source.url, text=source.text,
+    article.update(project_name=verdict["project_name"], projects=projects, link=source.url, text=source.text,
                    description=source.text[:DESCRIPTION_CHARS], tags="")
     return None, details
+
+
+def project_parts(verdict: dict, text: str) -> list[str]:
+    """The projects a deal covers, one row each (client rule: one row per project, shared values split equally).
+    Which projects a deal covers is a judgment about the text, so the triage model gives the list; code only checks
+    what is exact: every name must be written in the announcement. If any listed name is not, the list is not
+    trusted and the deal stays one row under its group name. Empty when no name is written at all."""
+    name, listed = verdict.get("project_name") or "", [p for p in verdict.get("projects") or [] if p]
+    if len(listed) > 1 and all(named_in(text, p) for p in listed):
+        return listed
+    return [name] if named_in(text, name) else []
 
 
 def run(settings=None, store=None, client=None, searcher=None, fetch=sources.fetch_news) -> dict:
@@ -101,8 +118,8 @@ def run(settings=None, store=None, client=None, searcher=None, fetch=sources.fet
             for article in new_articles:                      # oldest first
                 if settings.max_articles and candidates >= settings.max_articles:
                     break                                     # the rest are picked up by the next run
+                previous_id, last_id = last_id, article["id"]
                 looked_at += 1
-                last_id = article["id"]
                 if not sources.looks_like_a_deal(article["title"]):
                     continue
                 candidates += 1
@@ -110,35 +127,50 @@ def run(settings=None, store=None, client=None, searcher=None, fetch=sources.fet
                 stop, details = prepare(article, searcher, triage)
                 if details.get("triage"):
                     verdict = details["triage"]
-                    kind = "project deal" if verdict["is_project_deal"] else "not a project deal"
+                    kind = ("triage call FAILED: " + verdict["error"]) if verdict.get("error") else \
+                        "project deal" if verdict["is_project_deal"] else "not a project deal"
                     telemetry.progress(article["id"], "triage",
                                        f"{kind}; project {verdict['project_name']!r}; {verdict['reason']}")
-                final: dict = {}
-                if stop is None:
-                    texts[article["link"]] = article.pop("text")
-                    article["classification"] = classify(article, locate, store)
-                    telemetry.progress(article["id"], "region", f"{article['classification']['continent']} -> table "
-                                       f"{article['classification']['table_name']} ({article['classification']['status']})")
-                    final = process_article(app, article)
-                outcome = stop or final.get("outcome", "unknown")
-                outcomes[outcome] += 1
-                telemetry.progress(article["id"], "RESULT", outcome
-                                   + (f"; project {article.get('project_name')!r}" if article.get("project_name") else "")
-                                   + (f"; withheld: {', '.join(final['withheld'])}" if final.get("withheld") else ""))
-                report.append({
-                    "id": article["id"], "headline": article["title"], "company": article["company"], "date": article["date"],
-                    "listing_link": article["listing_link"], **details,
-                    "project_name": article.get("project_name"), "classification": article.get("classification"),
-                    "table": final.get("table"), "status": final.get("status"), "outcome": outcome,
-                    "attempts": final.get("attempts", 0), "article_chars": len(final.get("text") or ""),
-                    "extraction": final.get("extraction"), "withheld": final.get("withheld"), "validation": final.get("report"),
-                })
+                base = {"id": article["id"], "headline": article["title"], "company": article["company"],
+                        "date": article["date"], "listing_link": article["listing_link"], **details}
+                if stop is not None:
+                    outcomes[stop] += 1
+                    telemetry.progress(article["id"], "RESULT", stop)
+                    report.append({**base, "project_name": article.get("project_name"), "outcome": stop})
+                    if stop == "triage_failed":
+                        # Progress stops before this article, so the next run screens it again instead of losing it.
+                        last_id = previous_id
+                        break
+                    continue
+                texts[article["link"]] = article.pop("text")
+                projects = article.pop("projects")
+                for project in projects:                      # one row per project; shared values are split in N
+                    one = {**article, "project_name": project, "project_count": len(projects)}
+                    one["classification"] = classify(one, locate, store)
+                    telemetry.progress(one["id"], "region", f"{one['classification']['continent']} -> table "
+                                       f"{one['classification']['table_name']} ({one['classification']['status']})")
+                    final = process_article(app, one)
+                    outcome = final.get("outcome", "unknown")
+                    outcomes[outcome] += 1
+                    telemetry.progress(one["id"], "RESULT", f"{outcome}; project {project!r}"
+                                       + (f"; withheld: {', '.join(final['withheld'])}" if final.get("withheld") else ""))
+                    text = final.get("text") or ""
+                    report.append({
+                        **base, "project_name": project, "group_name": article["project_name"] if len(projects) > 1 else None,
+                        "project_count": len(projects), "classification": one["classification"],
+                        "table": final.get("table"), "status": final.get("status"), "outcome": outcome,
+                        "attempts": final.get("attempts", 0), "article_chars": len(text),
+                        "text_cut": len(text) > llm.ARTICLE_CHAR_LIMIT,   # the model saw a deal-centred window
+                        "extraction": final.get("extraction"), "withheld": final.get("withheld"),
+                        "validation": final.get("report"),
+                    })
         finally:
             if owns_store:
                 store.close()
 
         # Only after the articles were handled is progress recorded, so a crashed run is retried in full.
-        sources.write_state(STATE_FILE, str(last_id))
+        if last_id is not None:                       # nothing handled (the first triage failed): state stays as it was
+            sources.write_state(STATE_FILE, str(last_id))
         with open(settings.run_report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=1, default=str)   # what each candidate produced, for a person to inspect
         run_span.set_attribute("pipeline.candidates", candidates)

@@ -6,6 +6,8 @@ For every number the model returned, decide whether the source text supports it:
   DERIVED    not written, but explained by written amounts through one of the extraction rules:
              a sum of payments, a total split across N projects, shares x price, or the sum of the parts
   NOT_FOUND  neither: the model may have invented it, read another deal, or the source is incomplete
+  MARKET     a share price or market cap not stated in the announcement: market data for the client, checked
+             against the market elsewhere, never blocking
   EMPTY      nothing was extracted (recall is measured by the eval set, not here)
 
 `validate()` turns that into a decision the pipeline can route on. Only NOT_FOUND values block a write.
@@ -18,13 +20,14 @@ from dataclasses import dataclass, field
 
 from . import schema
 
-FOUND, DERIVED, NOT_FOUND, EMPTY = "FOUND", "DERIVED", "NOT_FOUND", "EMPTY"
+FOUND, DERIVED, NOT_FOUND, EMPTY, MARKET = "FOUND", "DERIVED", "NOT_FOUND", "EMPTY", "MARKET"
 
 MONEY_FIELDS = ("cash_payments_value", "exp_comit_value")
 PERCENT_FIELDS = ("nsr_percent", "interest_acquired_percent")
 PLAIN_FIELDS = ("shares_amount", "share_price", "project_area", "drilling_amount")
+MARKET_FIELDS = ("share_price", "owner_marketcap")      # market data for the client, not required in the announcement
 CHECKED_FIELDS = MONEY_FIELDS + ("shares_amount", "share_price", "shares_value", "aggregate_deal_value") + PERCENT_FIELDS + (
-    "project_area", "drilling_amount")
+    "project_area", "drilling_amount", "shares_value_scraped", "drilling_value", "owner_marketcap")
 _ONES = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen",
          "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
 _TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
@@ -62,8 +65,9 @@ def _forms(x: float) -> set[str]:
 
 MONEY, SHARES, OTHER = "money", "shares", "other"
 FIELD_KIND = {"cash_payments_value": MONEY, "exp_comit_value": MONEY, "shares_value": MONEY, "aggregate_deal_value": MONEY,
-              "shares_amount": SHARES}
+              "shares_value_scraped": MONEY, "drilling_value": MONEY, "owner_marketcap": MONEY, "shares_amount": SHARES}
 _CURRENCY_BEFORE = re.compile(r"(?:[A-Z]{0,2}\$|\b(?:CAD|USD|AUD|EUR|GBP|NZD))\s?$")
+_CURRENCY_LOOKBEHIND = r"(?:(?<=\$)|(?<=\$ )|(?<=CAD )|(?<=USD )|(?<=AUD )|(?<=CAD)|(?<=USD)|(?<=AUD))"
 _MONEY_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:dollars|in cash)\b", re.I)
 _SHARES_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:[a-z-]+\s){0,3}(?:shares|units|warrants)\b", re.I)
 
@@ -90,7 +94,9 @@ def find_number(text: str, x: float, percent: bool = False, kind: str | None = N
         # the lookbehind stops "five percent" matching inside "seventy-five percent"
         patterns.append(r"(?<!ty[- ])\b" + number_in_words(int(x)) + r"\s*(?:per\s?cent|percent)")
     if not percent and x >= 1e5:  # "2 million", "$1.5M", "250K"
-        patterns += [r"(?<![\d.,])" + re.escape(f) + r"\s*(?:million|mm\b|m\b)" for f in _forms(x / 1e6)]
+        patterns += [r"(?<![\d.,])" + re.escape(f) + r"\s*(?:million|mm\b)" for f in _forms(x / 1e6)]
+        # a bare "1m" is a metre in an exploration release ("1m @ 6.15 g/t"); it is a million only after a currency sign
+        patterns += [_CURRENCY_LOOKBEHIND + re.escape(f) + r"\s*m\b" for f in _forms(x / 1e6)]
         patterns += [r"(?<![\d.,])" + re.escape(f) + r"\s*(?:thousand|k\b)" for f in _forms(x / 1e3)]
     other = {MONEY: SHARES, SHARES: MONEY}.get(kind)
     for pattern in patterns:
@@ -107,43 +113,69 @@ _AMOUNT = re.compile(
     r"\s*(?P<unit>million|thousand|m\b|k\b)?(?=(?P<after>[^.;\n|]{0,40}))", re.I)
 
 
-def written_amounts(text: str, exclude: str | None = None) -> list[float]:
-    """Amounts written in the text, with repeats. A bare number such as a year does not count:
-    it needs a thousands separator, a currency sign, or a million/thousand unit.
+SUM_WINDOW = 1500   # the terms of a sum must be written within this many characters of each other
+_COUNT_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "both": 2}
+_STATED_COUNT = re.compile(r"\b(2|3|4|5|6|two|three|four|five|six|both)\s+(?:[a-z-]+\s){0,2}"
+                           r"(?:projects?|properties|tenements|licences|licenses|project areas|claim blocks)\b", re.I)
+
+
+def written_amounts_at(text: str, exclude: str | None = None) -> list[tuple[float, int]]:
+    """Amounts written in the text with their positions, with repeats. A bare number such as a year does not
+    count: it needs a thousands separator, a currency sign, or a million/thousand unit. "m" counts as million only
+    after a currency sign ("$1m"), because "1m" in an exploration release is a metre.
 
     Each amount has a kind (money, a share count, or other) so that a sum never mixes dollars with shares;
     `exclude` drops one kind."""
     out = []
     for m in _AMOUNT.finditer(text):
-        if not (m.group("cur") or "," in m.group("num") or m.group("unit")):
+        unit = (m.group("unit") or "").lower()
+        if unit == "m" and not m.group("cur"):
+            unit = ""
+        if not (m.group("cur") or "," in m.group("num") or unit):
             continue
         value = float(m.group("num").replace(",", "") + (m.group("frac") or ""))
-        unit = (m.group("unit") or "").lower()
         value *= 1e6 if unit in ("million", "m") else 1e3 if unit in ("thousand", "k") else 1
         if value < 1000:
             continue
         kind = MONEY if m.group("cur") else occurrence_kind(text, m.start("num"), m.end())
         if kind != exclude:
-            out.append(value)
-    return sorted(out)
+            out.append((value, m.start("num")))
+    return out
 
 
-def explain_by_rules(x: float, amounts: list[float], text: str, kind: str | None = None) -> str | None:
-    """A sum of up to three written amounts, or a written total (or two-term sum) split across 2-6 projects.
-    An amount is used twice only if it is written twice. This is a plausibility test, not a proof."""
+def written_amounts(text: str, exclude: str | None = None) -> list[float]:
+    """The values of written_amounts_at, sorted."""
+    return sorted(value for value, _ in written_amounts_at(text, exclude))
+
+
+def stated_project_counts(text: str) -> set[int]:
+    """Numbers of projects the text states: 'the five Option Projects', '2 project areas', 'both tenements'."""
+    return {int(n) if n.isdigit() else _COUNT_WORDS[n.lower()] for n in _STATED_COUNT.findall(text)}
+
+
+def explain_by_rules(x: float, amounts: list, text: str, kind: str | None = None, project_count: int = 1) -> str | None:
+    """A sum of up to three written amounts written near each other, or a written total (or two-term sum) split
+    across N projects, where N is the row's number of projects or a number of projects the text states.
+    An amount is used twice only if it is written twice. This is a plausibility test, not a proof: without the
+    count and distance limits it accepted 4% to 36% of unwritten round numbers in the seed-7 sample."""
+    pairs = [(a, None) if isinstance(a, int | float) else a for a in amounts]
 
     def as_sum(target: float, max_terms: int) -> str | None:
-        candidates = [a for a in amounts if a < target]
+        candidates = [p for p in pairs if p[0] < target]
         for n in range(2, max_terms + 1):
             for combo in itertools.combinations(candidates, n):
-                if abs(sum(combo) - target) <= 0.5:
-                    return " + ".join(f"{c:,.0f}" for c in combo)
+                positions = [pos for _, pos in combo if pos is not None]
+                if positions and max(positions) - min(positions) > SUM_WINDOW:
+                    continue
+                if abs(sum(v for v, _ in combo) - target) <= 0.5:
+                    return " + ".join(f"{v:,.0f}" for v, _ in combo)
         return None
 
     summed = as_sum(x, 3)
     if summed:
         return "sum of " + summed
-    for n in range(2, 7):
+    counts = stated_project_counts(text) | ({project_count} if project_count and project_count > 1 else set())
+    for n in sorted(c for c in counts if 2 <= c <= 6):
         total = x * n
         if total < 10000 or abs(total - round(total)) > 0.01 * n:
             continue
@@ -178,7 +210,7 @@ class Report:
 
     @property
     def checked(self) -> int:
-        return sum(1 for c in self.fields.values() if c.status != EMPTY)
+        return sum(1 for c in self.fields.values() if c.status in (FOUND, DERIVED, NOT_FOUND))
 
     @property
     def grounded(self) -> int:
@@ -202,9 +234,11 @@ class Report:
         }
 
 
-def validate(extraction: dict, article_text: str) -> Report:
+def validate(extraction: dict, article_text: str, project_count: int = 1) -> Report:
+    """`project_count` is the number of projects the row stands for (a deal over "A and B" processed as one row per
+    project gives 2), so a total shared by that many projects is accepted when split."""
     text = article_text.replace("\xa0", " ").replace("’", "'")
-    money_amounts, share_amounts = written_amounts(text, exclude=SHARES), written_amounts(text, exclude=MONEY)
+    money_amounts, share_amounts = written_amounts_at(text, exclude=SHARES), written_amounts_at(text, exclude=MONEY)
     report = Report(schema_issues=schema.issues(extraction))
     values = {name: to_number(extraction.get(name)) for name in CHECKED_FIELDS}
 
@@ -214,20 +248,37 @@ def validate(extraction: dict, article_text: str) -> Report:
             report.fields[name] = FieldCheck(EMPTY)
             continue
         snippet = find_number(text, x, percent=name in PERCENT_FIELDS, kind=FIELD_KIND.get(name))
-        report.fields[name] = FieldCheck(FOUND, x, snippet) if snippet else FieldCheck(NOT_FOUND, x)
+        if snippet:
+            report.fields[name] = FieldCheck(FOUND, x, snippet)
+        elif name in MARKET_FIELDS:
+            # The client defines share price (and market cap) as market data on the news date, not a number the
+            # announcement must state: a later step compares it with the market (evals/market.py), it does not block.
+            report.fields[name] = FieldCheck(MARKET, x, "market data: not stated in the announcement")
+        else:
+            report.fields[name] = FieldCheck(NOT_FOUND, x)
+
+    # An area is only an area in a unit that can be converted to hectares ("33 sub-blocks" is not one).
+    unit = (extraction.get("project_area_unit") or "ha").strip().lower()
+    if values["project_area"] and schema.HECTARES_PER_UNIT.get(unit) is None:
+        report.fields["project_area"] = FieldCheck(NOT_FOUND, values["project_area"], f"unit {unit!r} is not an area")
 
     def supported(name: str) -> bool:
-        return report.fields[name].status in (FOUND, DERIVED)
+        return report.fields[name].status in (FOUND, DERIVED, MARKET)
 
     def derive(name: str, evidence: str | None) -> None:
         if evidence and report.fields[name].status == NOT_FOUND:
             report.fields[name] = FieldCheck(DERIVED, values[name], evidence)
 
-    # Payments and share counts are often a sum of tranches, or one total shared by several projects.
-    for name in MONEY_FIELDS + ("shares_amount",):
+    # Payments, share counts and share values are often a sum of tranches, or one total shared by several projects.
+    for name in MONEY_FIELDS + ("shares_value", "shares_value_scraped", "shares_amount"):
         if report.fields[name].status == NOT_FOUND:
             amounts = share_amounts if name == "shares_amount" else money_amounts
-            derive(name, explain_by_rules(values[name], amounts, text, FIELD_KIND.get(name)))
+            derive(name, explain_by_rules(values[name], amounts, text, FIELD_KIND.get(name), project_count))
+
+    # The drilling value is the committed metres at the client's rate.
+    if values["drilling_value"] and values["drilling_amount"] and supported("drilling_amount") \
+            and _close(values["drilling_amount"] * DRILLING_USD_PER_METRE, values["drilling_value"]):
+        derive("drilling_value", f"drilling_amount x {DRILLING_USD_PER_METRE} USD")
 
     # Exploration commitments stated in metres are converted at a fixed rate.
     if report.fields["exp_comit_value"].status == NOT_FOUND:

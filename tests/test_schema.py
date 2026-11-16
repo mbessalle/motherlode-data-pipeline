@@ -38,7 +38,7 @@ def test_triage_verdict_accepts_only_a_real_boolean():
     assert TriageVerdict.model_validate({"is_project_deal": True, "project_name": " Acme "}).project_name == "Acme"
     with pytest.raises(ValidationError):
         TriageVerdict.model_validate({"is_project_deal": "yes"})
-    assert TriageVerdict().model_dump() == {"is_project_deal": False, "project_name": None, "reason": None}
+    assert TriageVerdict().model_dump() == {"is_project_deal": False, "project_name": None, "projects": [], "reason": None}
 
 
 def test_explicit_nulls_and_blanks_are_valid_for_every_field():
