@@ -23,38 +23,30 @@ Read all of them, `README.md` and `docs/extraction-rules/core-logic.md` and `edg
 
 ## Ground truth
 
-The analyst is Antonio Celis (Motherlode Consulting, the client). His table and source PDFs are on this machine,
-read-only, in the Snowflake checkout: `~/snowflake-motherload/evals/pdf_cases.jsonl` (236 cases: each pairs one
-analyst row with its most informative PDF and lists which analyst values are written in it,
-`written_in_document`, or follow from it by a rule, `derived_in_document`), the rows in
-`~/snowflake-motherload/data/client/oceania_export_2026-11-16.csv`, the PDFs under
-`~/snowflake-motherload/data/source_pdfs/projects/<project>/<file>`, and the field definitions in
-`~/snowflake-motherload/data/client/scraping_fields_2025-09-05.xlsx`.
+The reference is the client analyst's own deal table and the announcement PDF behind each row. It is private and
+never committed; `evals/end_to_end.py` reads it from the paths in `MOTHERLODE_CASES` (one case per row: the row,
+its most informative PDF, which analyst values are written in it, `written_in_document`, or follow from it by a
+rule, `derived_in_document`), `MOTHERLODE_ROWS` (the analyst's rows) and `MOTHERLODE_PDFS` (the PDFs). Your
+briefing gives the paths on this machine.
 
-His rules, read from his emails and field sheet (Gmail, threads of 1 May, 13 May, 29 May, 1 Jun, 8 Jun and
-5 Sep 2025; field sheet "Motherlode Data Scrapping Fields.xlsx", copy at the path above):
-- The owner is the BUYER. Brief of 1 May: "CEO of the company buying the asset", "Stock Exchange of the company
-  buying the asset"; field sheet: Owner Name, Owner Ticker, Owner Marketcap = "empresa que compra". Area and
-  resource are "of the asset being sold". A stored seller in owner_name is wrong, whatever its source.
-- Aggregate deal value = cash + exploration commitments + shares value (1 Jun: "Ojo con ser redundante" with a
-  combined cash + shares figure). It is calculated, not scraped. The first brief wanted it in US$, and also
-  aggregate / hectares; the September sheet has its own aggregate currency column.
-- Cash payments value = sum of all cash payments. Exploration commitment = sum of exploration spending,
-  drilling and the like. Drilling value = metres x 250 USD (sheet of 5 Sep; an email of 13 May said 200, superseded).
+The client's field rules (from the client's field definitions):
+- The owner (name, ticker, market cap) is the BUYER, the company acquiring the asset. Area and resource are those
+  of the asset being sold. A stored seller in owner_name is wrong, whatever its source.
+- Aggregate deal value = cash + exploration commitments + shares value, calculated, with no double count of a
+  combined cash-and-shares figure.
+- Cash payments value = sum of all cash payments. Exploration commitment = sum of exploration spending, drilling
+  and the like. Drilling value = metres x 250 USD.
 - Shares value = shares amount x share price; "Shares Value Scrapped" is the value stated in the news, separate.
-- Share price is market data: "idealmente valor de la fecha de la noticia, si muy complicado del dia de scrap".
-  So a share price missing from the announcement is expected; withholding it is a design conflict with the client,
-  not a model error. Say what the pipeline should do instead (for example look up the close on the news date).
-- A value shared by several projects is split equally (8 Jun). Interest acquired is a number only.
+- Share price is market data on the news date, so it is normally not in the announcement. The pipeline looks the
+  close up (`pipeline/market.py`); a price that does not match the close must not support a derived value.
+- A value shared by several projects is split equally. Interest acquired is a number only.
 - Deal period = years to complete the deal, from the payment anniversaries, usually 0 to 5.
 - One row per project; of several links per project only one holds the full detail.
-- Possible cause of analyst rows that name the seller (unconfirmed): on 13 May he asked to keep the original
-  "Project Ownership" column of the source dataset, which before a sale is the seller. Check it per row.
 
-The analyst can be wrong too. Known: in several rows `news_date` has day and month swapped (row 306 holds
-2025-04-03 for a release dated March 4, 2025). Classify every disagreement as a CODE bug, a MODEL error (the
-reply is wrong but the code handled it as designed), or a DATA problem (the analyst's row or the case file).
-Only code bugs are findings; report the other two as counts with examples.
+The analyst's table can be wrong too (for example a date with day and month swapped, or a seller as owner).
+Classify every disagreement as a CODE bug, a MODEL error (the reply is wrong but the code handled it as designed),
+or a DATA problem (the analyst's row or the case file). Only code bugs are findings; report the other two as counts
+with examples. Never copy client rows or document text into the repository.
 
 ## How to run it
 

@@ -6,10 +6,10 @@ with what the analyst stored.
     python -m evals.end_to_end run --openrouter ...                 # the same models through OpenRouter
     python -m evals.jev_verify RUN_DIR                              # Jev checks each extracted value (evals/jev_verify.py)
 
-The ground truth is the analyst's own table (Antonio Celis, Motherlode Consulting) and the announcement PDF behind
-each row, prepared in the Snowflake version of this project (`evals/pdf_cases.jsonl` there pairs each row with
-its most informative PDF and records which analyst values are written in it). Those files are the client's and
-are read from that checkout; nothing from them is committed here.
+The ground truth is the client analyst's own deal table and the announcement PDF behind
+each row, prepared in the Snowflake version of this project (one case per row: the row, its most informative PDF,
+and which analyst values are written in it). They are the client's and private: their paths come from
+MOTHERLODE_CASES, MOTHERLODE_ROWS and MOTHERLODE_PDFS, and nothing from them is committed here.
 
 What runs is `pipeline.run.run`, unchanged, with three substitutions and nothing else:
   feed       the sampled rows as listing entries (headline, company, date from the analyst's row)
@@ -63,10 +63,10 @@ from pipeline.store import MemoryStore
 from pipeline.validate import to_number
 
 HERE = Path(__file__).parent
-SNOWFLAKE = Path.home() / "snowflake-motherload"
-DEFAULT_CASES = SNOWFLAKE / "evals" / "pdf_cases.jsonl"
-DEFAULT_ROWS = SNOWFLAKE / "data" / "client" / "oceania_export_2026-11-16.csv"
-DEFAULT_PDFS = SNOWFLAKE / "data" / "source_pdfs" / "projects"
+# The client's data is private and never committed: these paths come from the environment.
+DEFAULT_CASES = Path(os.getenv("MOTHERLODE_CASES", "data/ground_truth/pdf_cases.jsonl"))
+DEFAULT_ROWS = Path(os.getenv("MOTHERLODE_ROWS", "data/ground_truth/rows.csv"))
+DEFAULT_PDFS = Path(os.getenv("MOTHERLODE_PDFS", "data/ground_truth/pdfs"))
 CACHE = HERE / ".cache" / "e2e"
 # USD per million tokens (input, output). Third-party price listings of November 2026; OpenAI's page was not read.
 PRICES = {"gpt-6.1-terra": (1.00, 5.00), "gpt-6-luna": (0.10, 0.50)}

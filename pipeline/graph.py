@@ -144,7 +144,7 @@ def build_graph(deps: Deps):
         withheld = dict(state.get("withheld") or {})
         owner_check = check_owner(state, row)
         if owner_check and owner_check["p_buyer"] < buyer.REVIEW:
-            # The stored owner is probably not the buyer ("empresa que compra"): withhold it and its ticker for review.
+            # The stored owner is probably not the buyer (the client's owner): withhold it and its ticker for review.
             gone = {k: row.pop(k) for k in ("owner_name", "owner_ticker", "owner_marketcap") if row.get(k)}
             withheld.update(gone)
             deps.review.add(article, state.get("table"), {"buyer_check": owner_check}, gone)

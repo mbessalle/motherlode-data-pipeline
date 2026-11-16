@@ -39,8 +39,8 @@ TIMEOUT_SECONDS = 600
 CACHE = Path(__file__).parent / ".cache" / "escalate"
 
 RULES = """You check a mining deal database row against its source announcement. The client's rules (Motherlode
-Consulting field sheet and emails):
-- owner_name, owner_ticker: the BUYER, the company that acquires or can earn the interest ("empresa que compra").
+Consulting field definitions):
+- owner_name, owner_ticker: the BUYER, the company that acquires or can earn the interest.
 - cash_payments_value: the sum of ALL cash payments for the project in this deal, including deferred, option and
   milestone payments. exp_comit_value: the sum of exploration expenditure commitments; a commitment in metres of
   drilling is converted at 250 USD per metre.

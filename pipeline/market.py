@@ -1,7 +1,7 @@
 """The buyer's share price on the news date, for a share price the announcement does not state.
 
-The client defines share price as market data: "idealmente valor de la fecha de la noticia, si muy complicado
-del dia de scrap" (field sheet, 5 Sep 2025). This reads the daily close with yfinance (Yahoo Finance; unofficial
+The client defines share price as market data: the close on the news date, or on the day of scraping when that is
+hard to get. This reads the daily close with yfinance (Yahoo Finance; unofficial
 endpoints, so a lookup can fail, and then the cell goes to review). Only a close within MAX_DAYS calendar days
 after the news date is accepted: a ticker that listed later (GGP.AX, listed June 2025) must not return a price
 from months afterwards. Results are cached in .cache/market/ (PIPELINE_MARKET_CACHE to change).

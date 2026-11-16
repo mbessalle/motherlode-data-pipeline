@@ -79,13 +79,15 @@ def prepare(article: dict, searcher, triage) -> tuple[str | None, dict]:
         return "triage_failed", details              # not a "no": the run stops here and the next run retries it
     if not verdict["is_project_deal"]:
         return "not_a_project_deal", details
-    if not verdict["project_name"]:
-        return "no_single_project", details          # a deal over a group of properties with no single name
+    if not verdict["project_name"] and not verdict.get("projects"):
+        return "no_single_project", details          # a deal with neither a project name nor a list of projects
     projects = project_parts(verdict, source.text)
     details["projects_checked"] = projects
     if not projects:
         return "project_name_not_in_source", details
-    article.update(project_name=verdict["project_name"], projects=projects, link=source.url, text=source.text,
+    # A group with no name of its own ("the Telfer operation and the Havieron project") is named after its projects.
+    group = verdict["project_name"] or " and ".join(projects)
+    article.update(project_name=group, projects=projects, link=source.url, text=source.text,
                    description=source.text[:DESCRIPTION_CHARS], tags="")
     return None, details
 

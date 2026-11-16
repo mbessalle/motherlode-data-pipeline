@@ -1,4 +1,4 @@
-"""Is the stored owner the buyer? The client's owner is "empresa que compra", and no code can tell a buyer from a
+"""Is the stored owner the buyer? The client's owner is the company buying the asset, and no code can tell a buyer from a
 seller, so TypeSafe's Jev decision model answers it with a probability (pipeline/jev.py).
 
 The graph asks it before a row is stored, when OPENROUTER_API_KEY is set: an owner below REVIEW is withheld with

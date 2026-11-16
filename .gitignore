@@ -30,3 +30,6 @@ last_run_articles.json
 build/
 *.egg-info/
 run_report.json
+
+# The client's deal table and PDFs: private, never committed
+data/ground_truth/

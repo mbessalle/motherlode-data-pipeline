@@ -1,5 +1,7 @@
 """Findings of the round-2 critic review (evals/.cache/critic_report_2.md in the review worktree), one test each.
 They failed on aed5286 and pass once the finding is fixed."""
+from types import SimpleNamespace
+
 from evals import escalate
 from pipeline import llm, run, sources
 from pipeline import validate as V
@@ -167,3 +169,17 @@ def test_an_owner_who_is_not_the_buyer_is_withheld():
 def test_a_number_after_an_accented_letter_does_not_crash_the_validator():
     assert V.find_number("Société105 RAB", 105) is None
     assert V.validate({"cash_payments_value": 500_000}, "Paiement é500,000 et A$500,000 en espèces.").passed
+
+
+# a group with no name of its own: the model gives project_name null and the list (seen on 5 of 30 deals)
+def test_a_list_of_projects_without_a_group_name_is_one_row_each():
+    source = SimpleNamespace(url="u", text="Newmont sells the Telfer operation and the Havieron project to Greatland. " * 30)
+    searcher = SimpleNamespace(find_announcement=lambda a: (source, []))
+
+    def triage(*a):
+        return {"is_project_deal": True, "project_name": None, "projects": ["Telfer", "Havieron"], "reason": "sale"}
+
+    article = {"id": 357, "title": "t", "company": "c"}
+    stop, details = run.prepare(article, searcher, triage)
+    assert stop is None and article["projects"] == ["Telfer", "Havieron"]
+    assert article["project_name"] == "Telfer and Havieron"

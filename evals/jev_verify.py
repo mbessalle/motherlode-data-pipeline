@@ -83,8 +83,8 @@ FIELDS = {
         "payment for this project.",
         "The number is shares issued in a placement or capital raising; or the shares on issue; or options or warrants "
         "not paid as consideration; or shares for a different deal; or a money amount."),
-    # The client defines share price as market data: "idealmente valor de la fecha de la noticia, si muy complicado
-    # del dia de scrap" (field sheet, 5 Sep 2025). So a price not written in the announcement can still be right.
+    # The client defines share price as market data on the news date, so a price not written in the announcement
+    # can still be right.
     "share_price": (
         "the price per share of the buyer's shares used to value the consideration shares",
         "The passage states this price as the issue price or deemed price of the shares issued for this project, or "

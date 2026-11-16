@@ -117,7 +117,7 @@ def issues(extraction: dict) -> list[str]:
         return [f"{'.'.join(str(part) for part in e['loc'])}: {e['msg']} (got {e['input']!r})" for e in error.errors()]
 
 
-# The client stores area in hectares (field sheet; first brief: "Coverage in hectares of the asset being sold").
+# The client stores area in hectares (the client's field definitions).
 HECTARES_PER_UNIT = {"ha": 1, "hectare": 1, "hectares": 1, "km2": 100, "km²": 100, "sq km": 100, "sqkm": 100,
                      "square kilometres": 100, "square kilometers": 100, "acres": 0.404686, "acre": 0.404686}
 

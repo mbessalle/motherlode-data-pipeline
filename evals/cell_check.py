@@ -19,7 +19,7 @@ or review. A cell that is not accepted gets a candidate pick: code collects the 
 passages about that field, and Jev picks which one is the field (or none), with probabilities.
 
 For the parties: every company named in the deal passage gets a probability of being the buyer (the client's
-owner is "empresa que compra"), and the ticker, project and deal type each get a probability of being right.
+owner is the company buying the asset), and the ticker, project and deal type each get a probability of being right.
 
 Writes RUN_DIR/cells.jsonl (one line per cell) and RUN_DIR/parties.jsonl, and a section of RUN_DIR/summary.md
 with the counts and the agreement with the analyst's table, leaving out the rows the critic found to be wrong
@@ -242,9 +242,9 @@ def money_spans(text: str, x: float) -> list[tuple[int, int]]:
 def rule_source(text: str, field: str, value: float, extraction: dict, check: dict | None = None
                 ) -> tuple[str, list[float]] | None:
     """A client rule that makes `value` follow from what is written, done in code: (description, the inputs).
-    Rules from the client's emails and field sheet: aggregate = cash + exploration + shares value, shares value =
+    Rules from the client's field definitions: aggregate = cash + exploration + shares value, shares value =
     shares x price, the sum of all payments of one kind, drilling at USD 250 per metre, and an equal split across
-    projects (8 Jun 2025). A split found here is only a candidate: check_cell asks Jev whether the total is shared."""
+    projects. A split found here is only a candidate: check_cell asks Jev whether the total is shared."""
     kind = FIELD_KIND.get(field)
     if field == "aggregate_deal_value":
         parts = [to_number(extraction.get(n)) for n in PARTS]
