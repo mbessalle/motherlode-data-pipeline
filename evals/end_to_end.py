@@ -236,6 +236,8 @@ def summary_text(seed: int, cases: list[dict], report: list[dict], comparison: l
 # --- commands -------------------------------------------------------------------------------------------------
 
 def prepared(args) -> tuple[list[dict], dict[int, dict], dict[int, Path]]:
+    # absolute paths: the PDFs become file:// links, and run() works inside the run folder
+    args.cases, args.rows, args.pdfs = args.cases.resolve(), args.rows.resolve(), args.pdfs.resolve()
     cases = choose(load_cases(args.cases), args.sample, args.seed)
     rows = load_rows(args.rows)
     pdf_of = {c["row_id"]: args.pdfs / c["project"] / c["file"] for c in cases}
