@@ -176,8 +176,21 @@ flowchart LR
 On a 30-deal sample of the client analyst's own deals, replayed through the production `run()`
 ([`evals/end_to_end.py`](evals/end_to_end.py), 8 deals at a time): 161 stored cells, of which **82 were settled
 by Jev, 43 by Opus with a quote code confirmed, 5 by the market price, and 31 left for review**. Jev cost under
-0.01 USD for the run; Opus read 26 of the 35 stored rows. Jev turned out to be reliable when it accepts and too
-strict when it flags (it distrusts "100% interest"), which is why it is a filter in front of Opus, not a judge.
+0.01 USD for the run; Opus read 26 of the 35 stored rows.
+
+Why Jev and not a cheap generative model as the middle tier: both were measured on the same cases
+([`evals/judge_benchmark.py`](evals/judge_benchmark.py)), the 28 cells Jev flagged that Opus then confirmed as
+correct, plus 16 wrong values built from the same passages (another number of the same kind). Same field
+definitions, examples and counterexamples; only the model differs.
+
+| Middle tier | Correct values accepted | Wrong values caught |
+|---|---|---|
+| Jev (`typesafe/jev-1.14`) | 17 of 28 | **7 of 16** |
+| gpt-6-luna, reasoning in JSON | **28 of 28** | 0 of 16 |
+
+The generative model approves anything written in the document, including a whole-deal total offered as the share
+value, so it would let wrong values into the database. Jev's mistakes are false alarms, which only cost an Opus
+read. That is why Jev stays as the filter and Opus decides.
 The buyer question runs in production too ([`pipeline/buyer.py`](pipeline/buyer.py)): an owner Jev scores
 below 0.5 is withheld for review instead of stored.
 
@@ -218,7 +231,10 @@ across any 2 to 6 projects, or a sum of any amounts in the document, accepted 4%
 Two of the old derivations had the right value with the wrong evidence (a royalty buy-down price "split" into an
 exploration commitment). Splits now need a stated number of projects (or, in the pipeline, the triage model's list
 of projects), and sum terms must be written near each other. The 5 correct values the stricter rules no longer
-accept go to the review tiers below instead of being accepted on wrong evidence.
+accept go to the review tiers below instead of being accepted on wrong evidence. Giving the validator the triage
+model's count of projects, as production does (`--projects`), changes nothing on this set: those values are sums
+of amounts written far apart in the document, or follow from no written number, which is a judgment for the model
+tiers, not for code.
 
 **Agreement with a human analyst.** The same deals were entered by hand in the analyst's spreadsheet. Where both
 have a value, the model agrees on 86 of 109 (79%): interest acquired 24 of 25 (the farm-in rule, final interest
@@ -354,9 +370,8 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
   could not be confirmed as the right, complete release were left out of the eval (7 of 40 sampled).
 - Share price is rarely stated in an announcement, so it is taken from the market: the buyer's close on the news
   date from Yahoo Finance (yfinance). Those endpoints are unofficial; when a lookup fails, the price stays empty.
-- The Jev check is strict: on a hand-checked sample it flagged about two correct values for each wrong one,
-  notably "100% interest". It is a filter in front of Opus, not a judge, and its thresholds are not yet tuned
-  per field.
+- Jev, the middle tier, raises false alarms on about 4 in 10 correct values it is asked about (measured above);
+  each costs an Opus read, not a wrong row.
 - Finding the announcement is the weakest step: on one day's feed, 9 of 21 deal-like headlines ended with no
   accepted source. The identity test prefers missing a deal to writing the wrong one.
 - The listing gives only a headline, a date and a company, and its headlines are its own wording, so the
