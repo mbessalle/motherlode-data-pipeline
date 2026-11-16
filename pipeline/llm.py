@@ -18,6 +18,9 @@ def _chat_json(client, model: str, system: str, user: str, operation: str) -> di
         **{"gen_ai.operation.name": "chat", "gen_ai.provider.name": "openai", "gen_ai.request.model": model,
            "pipeline.llm.purpose": operation},
     ) as s:
+        if telemetry.record_content():
+            s.set_attribute("gen_ai.input.messages", telemetry.clip(json.dumps(
+                [{"role": "system", "chars": len(system)}, {"role": "user", "content": user}], ensure_ascii=False)))
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -29,7 +32,10 @@ def _chat_json(client, model: str, system: str, user: str, operation: str) -> di
                 s.set_attribute("gen_ai.usage.input_tokens", usage.prompt_tokens)
                 s.set_attribute("gen_ai.usage.output_tokens", usage.completion_tokens)
             s.set_attribute("gen_ai.response.model", getattr(response, "model", model) or model)
-            return json.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content
+            if telemetry.record_content():
+                s.set_attribute("gen_ai.output.messages", telemetry.clip(content or ""))
+            return json.loads(content)
         except Exception as error:  # a failed call must not stop the batch; the caller treats {} as "nothing extracted"
             s.record_exception(error)
             s.set_attribute("error.type", type(error).__name__)
