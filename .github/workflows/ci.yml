@@ -19,3 +19,17 @@ jobs:
         run: ruff check .
       - name: Tests (offline, no API key, database or browser)
         run: pytest
+
+  ocr:
+    # The scanned-PDF path with the real OCR models (about 31 MB, downloaded on first use)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install
+        run: pip install ".[dev,ocr]"
+      - name: OCR tests
+        run: pytest tests/test_pdf.py

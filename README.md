@@ -248,7 +248,8 @@ break when they do.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install ".[dev]"
-pytest                      # 69 tests, offline: no API key, database or network needed
+pytest                      # 74 tests, offline: no API key, database or network needed
+pip install ".[ocr]"        # optional: read scanned PDFs (RapidOCR, local, no system package)
 ruff check .
 
 cp .env.example .env        # database, OpenAI and search settings
@@ -276,6 +277,7 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 | [`pipeline/store.py`](pipeline/store.py) | Postgres writes, an in-memory twin for tests, the review queue |
 | [`pipeline/sources.py`](pipeline/sources.py) | Discovery from the news sitemap, headline filter, state file |
 | [`pipeline/search.py`](pipeline/search.py) | Web search for the announcement and the identity test a result must pass |
+| [`pipeline/pdf.py`](pipeline/pdf.py) | PDF text: the free text layer first, local OCR only for pages that have none |
 | [`pipeline/telemetry.py`](pipeline/telemetry.py) | OpenTelemetry setup |
 | [`evals/`](evals/) | Eval cases, runner and results |
 | [`tools/integrity_checks.sql`](tools/integrity_checks.sql) | Read-only checks for the tables themselves |
@@ -292,6 +294,11 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 - **Progress is recorded last.** The last-processed id is written only after every article was handled, so a
   crashed run is retried in full.
 - **Prompts change only with an eval run.** They are kept byte-for-byte; the model is a setting.
+- **OCR only where there is no text.** Almost every announcement is a digital PDF, and its text layer is read for
+  free in milliseconds. A page with under 100 characters of text is treated as a scan and read with RapidOCR on
+  the local machine (about 5 seconds a page on a laptop CPU). Sending every page through a paid layout parser,
+  such as Snowflake's `AI_PARSE_DOCUMENT` in `LAYOUT` mode, costs about 7 USD per 1,000 pages for text the text
+  layer already gives. For each source tried, the run report records how many of its pages were read by OCR.
 
 ## Limits
 
@@ -305,3 +312,6 @@ A manual run takes `max_articles` to process only a few deal candidates; the res
 - The listing gives only a headline, a date and a company, and its headlines are its own wording, so the
   project name comes from the model and is checked against the announcement.
 - Discovery depends on one third-party sitemap; a change there stops new articles, and the run fails loudly.
+- OCR was checked on one scanned announcement (a digital release rendered to images): all 26 numbers in its
+  text were read, but some spaces between words were lost. OCR lines are joined top to bottom, so a page with
+  two columns of text can come out interleaved.
