@@ -81,8 +81,8 @@ def glued_to_letters(text: str, start: int) -> bool:
     glued to it ("AUD250,000", "US$") is still a value (critic N4)."""
     if start == 0 or not text[start - 1].isalpha():
         return False
-    letters = re.search(r"[A-Za-z]+$", text[max(0, start - 6):start]).group(0)
-    return letters.upper() not in _CURRENCY_CODES
+    letters = re.search(r"[^\W\d_]+$", text[max(0, start - 6):start])   # any letters, accented ones too ("é105")
+    return not letters or letters.group(0).upper() not in _CURRENCY_CODES
 
 
 def occurrence_kind(text: str, start: int, end: int) -> str:

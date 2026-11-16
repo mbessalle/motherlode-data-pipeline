@@ -162,3 +162,8 @@ def test_an_owner_who_is_not_the_buyer_is_withheld():
     assert "owner_name" not in row and "owner_ticker" not in row and row["cash_payments_value"] == 250_000
     assert final["outcome"] == "inserted_partial" and final["withheld"]["owner_name"] == "Spartan Resources"
     assert queued and queued[0][3] == {"owner_name": "Spartan Resources", "owner_ticker": "ASX:SPR"}
+
+
+def test_a_number_after_an_accented_letter_does_not_crash_the_validator():
+    assert V.find_number("Société105 RAB", 105) is None
+    assert V.validate({"cash_payments_value": 500_000}, "Paiement é500,000 et A$500,000 en espèces.").passed
