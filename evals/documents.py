@@ -14,7 +14,10 @@ CACHE = Path(__file__).parent / ".cache" / "pdf_text"
 
 
 def document_text(path: Path | str) -> str:
-    content = Path(str(path).removeprefix("file://")).read_bytes()
+    path = Path(str(path).removeprefix("file://"))
+    if path.suffix == ".txt":                       # a web page already read as text
+        return " ".join(path.read_text().split())
+    content = path.read_bytes()
     cached = CACHE / f"{hashlib.sha256(content).hexdigest()[:32]}.txt"
     if cached.exists():
         return cached.read_text()
