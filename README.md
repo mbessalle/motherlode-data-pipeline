@@ -174,7 +174,7 @@ flowchart LR
 On a 30-deal sample of the client analyst's own deals, replayed through the production `run()`
 ([`evals/end_to_end.py`](evals/end_to_end.py), 8 deals at a time): 161 stored cells, of which **82 were settled
 by Jev, 43 by Opus with a quote code confirmed, 5 by the market price, and 31 left for review**. Jev cost under
-0.01 USD for the run; Opus read 26 of the 41 stored rows. Jev turned out to be reliable when it accepts and too
+0.01 USD for the run; Opus read 26 of the 35 stored rows. Jev turned out to be reliable when it accepts and too
 strict when it flags (it distrusts "100% interest"), which is why it is a filter in front of Opus, not a judge.
 The buyer question runs in production too ([`pipeline/buyer.py`](pipeline/buyer.py)): an owner Jev scores
 below 0.5 is withheld for review instead of stored.
