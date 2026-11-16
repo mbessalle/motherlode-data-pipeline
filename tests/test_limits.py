@@ -16,3 +16,12 @@ def test_a_stuck_job_is_killed_at_the_limit_and_the_rest_finish():
     assert results == [0, None, 0.2, None, 0]
     assert sorted(failed) == [1, 3]                     # 1 timed out, 3 raised
     assert time.monotonic() - started < 10              # nobody waited for the 60 s job
+
+
+def test_a_failed_opus_call_skips_its_deal_and_the_run_goes_on(tmp_path, monkeypatch):
+    from evals import escalate
+    monkeypatch.setattr(escalate, "flagged", lambda run_dir: {("a", 1): {"cells": []}, ("b", 1): {"cells": []}})
+    monkeypatch.setattr(escalate, "document", lambda run_dir, key: ("P", "text"))
+    monkeypatch.setattr(escalate, "ask_model", lambda *a: (_ for _ in ()).throw(RuntimeError("limit")))
+    assert escalate.run(tmp_path) == []
+    assert len(__import__("json").loads((tmp_path / "escalate_failed.json").read_text())) == 2

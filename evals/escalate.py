@@ -180,7 +180,7 @@ def claude_code(system: str, user: str, schema: dict, run=subprocess.run) -> tup
                "--json-schema", json.dumps(schema), "--system-prompt", system]
     done = run(command, input=user, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     if done.returncode != 0:
-        raise RuntimeError(f"claude -p failed ({done.returncode}): {done.stderr[:300]}")
+        raise RuntimeError(f"claude -p failed ({done.returncode}): {(done.stderr or done.stdout)[:300]}")
     reply = json.loads(done.stdout)
     answer = reply.get("structured_output") or json.loads(reply["result"])
     usage = reply.get("usage") or {}
@@ -217,12 +217,21 @@ def run(run_dir: Path, call=claude_code) -> list[dict]:
 
     def one(item):
         key, flags, project, text = item
-        answer, usage = ask_model(project, flags, text, call)
+        try:
+            answer, usage = ask_model(project, flags, text, call)
+        except Exception as error:                  # one failed call skips its deal; the rest of the run goes on
+            return {"row_id": key[0], "project": project, "error": str(error)[:300]}
         count = max((c.get("project_count") or 1) for c in flags["cells"]) if flags["cells"] else 1
         return {"row_id": key[0], "project": project, "usage": usage, **check_answer(answer, text, count)}
 
     with ThreadPoolExecutor(PARALLEL) as pool:      # results keep the order of the flagged deals
-        return list(pool.map(one, items))
+        results = list(pool.map(one, items))
+    failed = [r for r in results if "error" in r]
+    (run_dir / "escalate_failed.json").write_text(json.dumps(failed, indent=1))
+    if failed:
+        print(f"{len(failed)} of {len(results)} Opus calls failed and were skipped (escalate_failed.json); "
+              f"a re-run retries only those, the answers already given are cached", flush=True)
+    return [r for r in results if "error" not in r]
 
 
 def summary(results: list[dict]) -> str:
