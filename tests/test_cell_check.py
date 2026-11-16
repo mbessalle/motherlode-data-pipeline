@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from evals import cell_check, jev, market
+from evals import cell_check, jev
+from pipeline import market
 
 TEXT = ("Acme Gold Ltd (ASX:ACM) will acquire a 70% interest in the Foggy Mountain Project from Vendor Metals Pty Ltd. "
         "Drilling returned 1m @ 6.15 g/t gold and 4m @ 3.09 g/t gold. "

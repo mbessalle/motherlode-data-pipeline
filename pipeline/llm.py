@@ -7,7 +7,9 @@ from . import telemetry
 from .prompts import CLASSIFIER_SYSTEM_PROMPT, EXTRACTOR_SYSTEM_PROMPT, TRIAGE_SYSTEM_PROMPT
 from .schema import TriageVerdict
 
-ARTICLE_CHAR_LIMIT = 15000
+# 25,000 characters keeps every value of the seed-7 sample (the latest analyst value sat at character 23,373);
+# a longer document keeps its deal-term passages (deal_window).
+ARTICLE_CHAR_LIMIT = 25000
 TRIAGE_CHAR_LIMIT = 4000
 
 
@@ -76,6 +78,8 @@ def classify_location(client, model: str, context: str) -> dict:
     if not context.strip():
         return {"country": None, "continent": None}
     data = _chat_json(client, model, CLASSIFIER_SYSTEM_PROMPT, context, "classify_location")
+    if "_error" in data:      # a failed call is not "no continent" (critic N3): the run holds it for a retry
+        return {"country": None, "continent": None, "error": data["_error"]}
     return {"country": data.get("country"), "continent": data.get("continent")}
 
 

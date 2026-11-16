@@ -77,6 +77,19 @@ CURRENCIES = {"cash_payments_value": "cash_payments_currency", "exp_comit_value"
               "aggregate_deal_value": "aggregate_deal_currency", "shares_value": "shares_currency"}
 
 
+def code_version() -> dict:
+    import subprocess
+
+    from pipeline import prompts
+
+    def git(*args):
+        return subprocess.run(["git", *args], capture_output=True, text=True, cwd=HERE.parent).stdout.strip()
+
+    return {"commit": git("rev-parse", "HEAD"), "uncommitted_changes": bool(git("status", "--porcelain", "--", "pipeline")),
+            "prompts": {name: hashlib.sha256(getattr(prompts, name).encode()).hexdigest()[:8]
+                        for name in ("TRIAGE_SYSTEM_PROMPT", "EXTRACTOR_SYSTEM_PROMPT", "CLASSIFIER_SYSTEM_PROMPT")}}
+
+
 # --- inputs ---------------------------------------------------------------------------------------------------
 
 def load_cases(path: Path) -> list[dict]:
@@ -256,8 +269,11 @@ def run_sample(args, inner=None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     gates_off = [name for name, off in (("headline filter", args.no_headline_filter), ("date check", args.no_date_check)) if off]
     # The full case records are saved with the run: the case file is rebuilt in its own checkout and ids can change.
+    # What made this evidence: the commit (and whether the tree had uncommitted changes) and a hash of each prompt,
+    # so evidence from mixed code is detectable (critic round 2, N1).
     (out / "sample.json").write_text(json.dumps({"seed": args.seed, "size": len(cases), "gates_off": gates_off,
-                                                 "cases": [c["id"] for c in cases], "case_records": cases}, indent=1))
+                                                 "code": code_version(), "cases": [c["id"] for c in cases],
+                                                 "case_records": cases}, indent=1))
     os.environ.setdefault("PIPELINE_TRACE_FILE", str(out / "spans.jsonl"))
     os.environ.setdefault("PIPELINE_TRACE_CONTENT", "1")
 

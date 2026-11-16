@@ -101,7 +101,12 @@ def test_area_is_normalised_to_hectares():
 def test_market_share_price_is_not_withheld():
     text = "The Company will issue 10,000,000 fully paid ordinary shares to the vendor. " * 20
     r = V.validate({"shares_amount": 10_000_000, "share_price": 0.05, "shares_value": 500_000}, text)
-    assert "share_price" not in r.not_found and "shares_value" not in r.not_found
+    assert "share_price" not in r.not_found                      # market data never blocks
+    # shares_value from that price counts only once code confirmed the price against the market (round-2 N7)
+    assert "shares_value" in r.not_found
+    close = {"close": 0.051, "date": "2025-03-04", "symbol": "ACM.AX"}
+    confirmed = V.validate({"shares_amount": 10_000_000, "share_price": 0.05, "shares_value": 500_000}, text, market_price=close)
+    assert confirmed.fields["shares_value"].status == V.DERIVED and confirmed.passed
 
 
 # F14 -- the identity test counts listing-site verbs as identifying words (row 438: {'sarama','venn','advances'})
@@ -140,7 +145,7 @@ def test_a_group_name_becomes_one_row_per_project():
 def test_a_split_needs_a_number_of_projects_and_a_sum_needs_nearby_terms():
     one_project = "Infinity will pay $50,000 cash for 100% of Highland Resources. " * 3
     assert V.validate({"cash_payments_value": 12_500}, one_project).fields["cash_payments_value"].status == V.NOT_FOUND
-    four = "Infinity will pay $50,000 cash for the four tenements. " * 3
+    four = "Infinity will pay $50,000 cash for the four projects. " * 3
     assert V.validate({"cash_payments_value": 12_500}, four).fields["cash_payments_value"].status == V.DERIVED
     assert V.validate({"cash_payments_value": 25_000}, one_project, project_count=2).fields["cash_payments_value"].status == V.DERIVED
     far_apart = "A payment of $100,000 on signing. " + "Drilling and assays. " * 200 + "Placement of $150,000 completed."

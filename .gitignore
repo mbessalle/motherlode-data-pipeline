@@ -22,6 +22,7 @@ output/
 Thumbs.db
 # Eval cache (downloaded article texts and model replies)
 evals/.cache/
+.cache/
 review_queue.jsonl
 last_run_articles.json
 

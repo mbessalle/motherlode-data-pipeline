@@ -27,7 +27,9 @@ def test_a_value_must_be_written_in_its_quote_or_follow_by_a_rule():
     quote = "Cash consideration of A$250,000 and a milestone payment of A$1,000,000"
     assert escalate.value_supported(1_250_000, quote, "cash_payments_value")          # sum
     assert escalate.value_supported(250_000, quote, "cash_payments_value")            # written
-    assert escalate.value_supported(83_750_000, "Equity consideration of $167.5 million", "shares_value")   # split by 2
+    # split by 2 only when the row is one of 2 projects (the pipeline's project count), not by any divisor
+    assert escalate.value_supported(83_750_000, "Equity consideration of $167.5 million", "shares_value", project_count=2)
+    assert not escalate.value_supported(83_750_000, "Equity consideration of $167.5 million", "shares_value")
     assert not escalate.value_supported(3_000_000, quote, "cash_payments_value")
 
 

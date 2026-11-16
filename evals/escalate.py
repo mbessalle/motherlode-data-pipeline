@@ -28,9 +28,9 @@ import re
 import subprocess
 from pathlib import Path
 
-from evals import cell_check
-from pipeline import telemetry
+from pipeline import telemetry, validate
 from pipeline.pdf import pdf_text
+from pipeline.search import company_words
 from pipeline.validate import to_number
 
 MODEL = os.getenv("ESCALATE_MODEL", "opus")          # a Claude Code model alias, run on the subscription
@@ -138,25 +138,35 @@ def quote_found(quote: str, text: str) -> bool:
     return bool(pieces) and all(p in squash(text) for p in pieces)
 
 
-def value_supported(value: float | None, quote: str, field: str) -> bool:
-    """The value is written in the quote, or follows from the quote's numbers by a rule (sum, split by 2-6, x250)."""
+def value_supported(value: float | None, quote: str, field: str, project_count: int = 1) -> bool:
+    """The value is written in the quote as the field's kind of number, or follows from the quote's numbers by the
+    validator's own rules (sum of nearby amounts, split by the row's project count or a stated count, metres x 250).
+    The same rules the pipeline uses, so "4,000m of drilling" is metres and not millions (critic round 2, N11)."""
     if value is None:
         return True
-    if cell_check.number_spans(quote, value, percent=field in cell_check.PERCENT_FIELDS):
+    percent, kind = field in validate.PERCENT_FIELDS, validate.FIELD_KIND.get(field)
+    if validate.find_number(quote, value, percent=percent, kind=kind):
         return True
-    numbers = [float(n.replace(",", "")) * (1e6 if (u or "").lower() in ("m", "million") else 1)
-               for n, u in re.findall(r"(\d[\d,]*(?:\.\d+)?)\s*(m\b|million)?", quote, re.I)]
-    numbers = [n for n in numbers if n]
-    candidates = set(numbers) | {sum(numbers)} | {n * 250 for n in numbers} | {n / k for n in numbers for k in range(2, 7)}
-    candidates |= {(a + b) / k for i, a in enumerate(numbers) for b in numbers[i + 1:] for k in range(1, 7)}
-    return any(abs(c - value) <= max(1.0, 0.01 * abs(value)) for c in candidates)
+    if percent:
+        return False
+    if field == "exp_comit_value":
+        metres = value / validate.DRILLING_USD_PER_METRE
+        if metres == int(metres) and re.search(r"(?<![\d.,])" + re.escape(f"{int(metres):,}").replace(",", ",?")
+                                               + r"\s*(?:m\b|metres|meters)", quote):
+            return True
+    amounts = validate.written_amounts_at(quote, only=validate.SHARES) if kind == validate.SHARES else \
+        validate.written_amounts_at(quote, exclude=validate.SHARES)
+    return bool(validate.explain_by_rules(value, amounts, quote, kind, project_count))
 
 
-def check_answer(answer: dict, text: str) -> dict:
+def check_answer(answer: dict, text: str, project_count: int = 1) -> dict:
     for cell in answer.get("cells", []):
-        cell["quote_checked"] = quote_found(cell["quote"], text) and value_supported(to_number(cell["value"]), cell["quote"], cell["field"])
+        cell["quote_checked"] = quote_found(cell["quote"], text) and value_supported(
+            to_number(cell["value"]), cell["quote"], cell["field"], project_count)
     buyer = answer.get("buyer") or {}
-    buyer["quote_checked"] = bool(buyer.get("name")) and quote_found(buyer.get("quote", ""), text)
+    # the buyer's own name must be in its quote: a true sentence that names someone else proves nothing (N10)
+    named = bool(buyer.get("name")) and set(company_words(buyer["name"])) <= set(squash(buyer.get("quote", "")).replace(",", " ").split())
+    buyer["quote_checked"] = named and quote_found(buyer.get("quote", ""), text)
     return answer
 
 
@@ -203,7 +213,8 @@ def run(run_dir: Path, call=claude_code) -> list[dict]:
         row_id = key[0]
         project, text = document(run_dir, key)
         answer, usage = ask_model(project, flags, text, call)
-        results.append({"row_id": row_id, "project": project, "usage": usage, **check_answer(answer, text)})
+        count = max((c.get("project_count") or 1) for c in flags["cells"]) if flags["cells"] else 1
+        results.append({"row_id": row_id, "project": project, "usage": usage, **check_answer(answer, text, count)})
     return results
 
 

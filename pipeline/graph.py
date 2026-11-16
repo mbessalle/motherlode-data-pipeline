@@ -18,9 +18,10 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from . import schema, telemetry
+from . import buyer, schema, telemetry
 from .config import FALLBACK_TABLE
 from .search import release_date
+from .validate import to_number as schema_number
 from .validate import validate
 
 
@@ -37,6 +38,7 @@ class ArticleState(TypedDict, total=False):
     withheld: dict           # values removed before writing
     outcome: str             # how the article left the graph
     retry_failed: bool       # the corrected retry returned nothing: the first attempt is quarantined and kept
+    buyer_check: dict        # Jev's P(owner is the buyer), when configured
 
 
 @dataclass
@@ -46,6 +48,8 @@ class Deps:
     store: object            # PostgresStore or MemoryStore
     review: object           # ReviewQueue
     max_attempts: int = 2
+    market: Callable[[str | None, str | None], dict | None] | None = None   # (ticker, date) -> close, or None
+    buyer: Callable[[str, str | None, str | None], dict | None] | None = None   # (text, owner, project) -> P(buyer)
 
 
 def build_graph(deps: Deps):
@@ -90,9 +94,26 @@ def build_graph(deps: Deps):
             return {"attempts": attempts, "retry_failed": True}
         return {"attempts": attempts, "outcome": "extract_failed" if failed else "no_data"}
 
+    def market_price(state: ArticleState, extraction: dict) -> tuple[dict | None, dict]:
+        """The buyer's close on the news date, looked up by code (the client's share price is market data). When the
+        model gave a share count but no price, the price is filled and shares value = count x price is computed."""
+        if deps.market is None or not (extraction.get("share_price") or extraction.get("shares_amount")):
+            return None, extraction
+        day = str(extraction.get("news_date") or "")[:10] or (state["article"].get("date") or "")[:10] or None
+        with telemetry.span("market_price", **{"pipeline.market.ticker": extraction.get("owner_ticker")}) as s:
+            close = deps.market(extraction.get("owner_ticker"), day)
+            s.set_attribute("pipeline.market.found", close is not None)
+        if close and not extraction.get("share_price"):
+            extraction = {**extraction, "share_price": close["close"]}
+            amount = schema_number(extraction.get("shares_amount"))
+            if amount and not extraction.get("shares_value"):
+                extraction["shares_value"] = round(amount * close["close"], 2)
+        return close, extraction
+
     def check(state: ArticleState) -> dict:
+        close, extraction = market_price(state, state["extraction"])
         with telemetry.span("validate") as s:
-            report = validate(state["extraction"], state["text"], state["article"].get("project_count", 1))
+            report = validate(extraction, state["text"], state["article"].get("project_count", 1), close)
             s.set_attribute("pipeline.validate.checked", report.checked)
             s.set_attribute("pipeline.validate.grounded", report.grounded)
             s.set_attribute("pipeline.validate.not_found", ",".join(report.not_found))
@@ -100,7 +121,7 @@ def build_graph(deps: Deps):
         telemetry.progress(state["article"].get("id"), "validate", f"{report.grounded} of {report.checked} numbers supported"
                            + (f"; NOT supported: {', '.join(report.not_found)}" if report.not_found else "")
                            + (f"; schema: {'; '.join(report.schema_issues)}" if report.schema_issues else ""))
-        return {"report": report.as_dict(), "feedback": report.feedback()}
+        return {"report": report.as_dict(), "feedback": report.feedback(), "extraction": extraction}
 
     def quarantine(state: ArticleState) -> dict:
         """Withhold what the article does not support, queue it for review, keep the rest."""
@@ -120,7 +141,14 @@ def build_graph(deps: Deps):
         row["news_title"] = article.get("title")
         # The listing date can trail the release by days; keep the model's date only if the announcement writes it.
         row["news_date"] = release_date(state.get("text", ""), article.get("date") or "", row.get("news_date"))
-        suffix = "_partial" if state.get("withheld") else ""
+        withheld = dict(state.get("withheld") or {})
+        owner_check = check_owner(state, row)
+        if owner_check and owner_check["p_buyer"] < buyer.REVIEW:
+            # The stored owner is probably not the buyer ("empresa que compra"): withhold it and its ticker for review.
+            gone = {k: row.pop(k) for k in ("owner_name", "owner_ticker", "owner_marketcap") if row.get(k)}
+            withheld.update(gone)
+            deps.review.add(article, state.get("table"), {"buyer_check": owner_check}, gone)
+        suffix = "_partial" if withheld else ""
         with telemetry.span("store", **{"db.collection.name": state["table"], "pipeline.store.mode": state["status"]}) as s:
             try:
                 if state["status"] == "new":
@@ -130,10 +158,28 @@ def build_graph(deps: Deps):
                 written = sum(1 for value in row.values() if value not in (None, ""))
                 telemetry.progress(article.get("id"), "store", f"{'insert into' if state['status'] == 'new' else 'update'} "
                                    f"{state['table']}: {written} fields")
-                return {"outcome": ("inserted" if state["status"] == "new" else "updated") + suffix}
+                return {"outcome": ("inserted" if state["status"] == "new" else "updated") + suffix, "withheld": withheld,
+                        "buyer_check": owner_check}
             except Exception as error:
                 s.record_exception(error)
                 return {"outcome": "db_error"}
+
+    def check_owner(state: ArticleState, row: dict) -> dict | None:
+        """Jev's probability that the owner is the buyer, or None (no check configured, no owner, or a failed call:
+        then the owner is stored unchecked, never guessed)."""
+        if deps.buyer is None or not row.get("owner_name"):
+            return None
+        with telemetry.span("buyer_check") as s:
+            try:
+                result = deps.buyer(state.get("text", ""), row["owner_name"], state["article"].get("project_name"))
+            except Exception as error:
+                s.record_exception(error)
+                s.set_attribute("error.type", type(error).__name__)
+                return None
+            s.set_attribute("pipeline.buyer.p", result["p_buyer"])
+        telemetry.progress(state["article"].get("id"), "buyer", f"{row['owner_name']}: P(buyer) {result['p_buyer']:.2f}, "
+                           f"role {result['role']}")
+        return result
 
     def after(step_if_ok: str):
         return lambda state: END if state.get("outcome") else step_if_ok

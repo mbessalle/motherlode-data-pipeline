@@ -64,12 +64,12 @@ def distinctive_words(title: str) -> set[str]:
 
 def date_spellings(day: date) -> list[str]:
     """How a release writes its date: November 12, 2026 / Nov. 12, 2026 / 12 November 2026 / 04 March 2025 /
-    2026-11-12 / 20/11/2024 / 20.11.2024. Numeric dates are read day first, as Australian and Canadian releases
-    write them (row 248: "ASX ANNOUNCEMENT 20/11/2024")."""
+    2026-11-12 / 20/11/2024 / 20.11.2024 / 20-11-2024 / 20/11/24. Numeric dates are read day first, as Australian
+    and Canadian releases write them (row 248: "ASX ANNOUNCEMENT 20/11/2024")."""
     month, short, d, m, y = _MONTHS[day.month - 1], _MONTHS[day.month - 1][:3], day.day, day.month, day.year
     return [rf"{month} 0?{d}(?:st|nd|rd|th)?,? {y}", rf"{short}\.? 0?{d}(?:st|nd|rd|th)?,? {y}",
             rf"0?{d}(?:st|nd|rd|th)? {month},? {y}", rf"0?{d} {short}\.? {y}", day.isoformat(),
-            rf"0?{d}[/.]0?{m}[/.]{y}"]
+            rf"0?{d}[/.-]0?{m}[/.-]{y}", rf"0?{d}/0?{m}/{y % 100:02d}(?!\d)"]
 
 
 def dated_near(text: str, listed: str) -> bool:

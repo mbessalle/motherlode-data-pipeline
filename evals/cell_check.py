@@ -12,7 +12,7 @@ Code and Jev split the work by what each does reliably:
 For each numeric cell the result says where the value comes from (its `source`):
   stated          written in the document; Jev judges each place it is written and the best passage counts
   computed        follows from written parts by a rule (the validator's evidence); Jev judges the parts' passages
-  market          a share price not in the document, compared with the buyer's close on the news date (evals/market.py)
+  market          a share price not in the document, compared with the buyer's close on the news date (pipeline/market.py)
   not_in_document none of the above
 and what to do with it (`action`): accept (P >= ACCEPT), correct (a better value proposed with P >= ACCEPT),
 or review. A cell that is not accepted gets a candidate pick: code collects the numbers of the right kind from the
@@ -33,9 +33,10 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from evals import end_to_end, jev, market
-from evals.jev_verify import BUYER, DEAL_TYPE, FIELDS, PROJECT, ROLE, TICKER, ask, deal_passage, passage, sentence_window
-from pipeline import telemetry
+from evals import end_to_end, jev
+from evals.jev_verify import DEAL_TYPE, FIELDS, PROJECT, TICKER, ask, passage, sentence_window
+from pipeline import market, telemetry
+from pipeline.buyer import BUYER, ROLE, party_passage
 from pipeline.pdf import pdf_text
 from pipeline.search import company_words
 from pipeline.validate import (
@@ -274,7 +275,7 @@ def rule_source(text: str, field: str, value: float, extraction: dict, check: di
 
 def check_cell(text: str, project: str, field: str, value: float, unit: str | None, check: dict | None,
                ticker: str | None, news_date: str | None, extraction: dict | None = None,
-               done: dict | None = None) -> dict:
+               done: dict | None = None, project_count: int = 1) -> dict:
     """`done` holds the cells of this row already checked, so a computed value can take its parts' verdicts."""
     kind, percent = FIELD_KIND.get(field), field in PERCENT_FIELDS
     spans = number_spans(text, value, percent=percent, kind=kind)
@@ -284,8 +285,9 @@ def check_cell(text: str, project: str, field: str, value: float, unit: str | No
     rule = None if spans or percent else rule_source(text, field, value, extraction or {}, check)
     if rule and "split across" in rule[0]:
         total, n = rule[1][0], int(re.search(r"split across (\d+)", rule[0]).group(1))
-        if projects_named(project) == n:
-            cell["split_by"] = "project name"            # "Telfer and Havieron": two projects, written in code-readable form
+        if project_count == n or projects_named(project) == n:
+            # code knows the row is one of n projects (the pipeline's one-row-per-project count): no question to ask
+            cell["split_by"] = "project count"            # "Telfer and Havieron": two projects, written in code-readable form
         else:
             # Otherwise whether the total is shared is a judgment about the text: Jev decides, code divides.
             places = best_places(text, field, number_spans(text, total, kind=kind)) or best_places(text, field, number_spans(text, total))
@@ -352,22 +354,6 @@ def companies(text_passage: str, also: list[str | None]) -> list[str]:
     return names[:MAX_COMPANIES]
 
 
-_ROLE_WORDS = re.compile(r"vendors?\b|optionor|optionee|acquir|purchas|\bsells?\b|\bsale\b|\bsold\b|farm[- ]?(?:in|out)|"
-                         r"earn[- ]?in|\bearn\b|transfer|consideration|divest", re.I)
-
-
-def party_passage(text: str, company: str, limit: int = 3000) -> str:
-    """The opening, the sentences naming the company with a deal term, and every sentence with a role word
-    ("the vendors", "optionee", "acquire"): who buys is often said only once, without the stored owner's name."""
-    out = deal_passage(text, company)
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        if len(out) + len(sentence) > limit:
-            break
-        if _ROLE_WORDS.search(sentence) and len(sentence) < 500 and sentence not in out:
-            out += " [...] " + sentence
-    return out[:limit]
-
-
 def check_parties(text: str, extraction: dict, project: str, analyst_owner: str | None) -> dict:
     owner, ticker, deal_type = extraction.get("owner_name"), extraction.get("owner_ticker"), extraction.get("deal_type")
     text_passage = party_passage(text, owner or analyst_owner or project or "")
@@ -424,15 +410,17 @@ def check_run(run_dir: Path, rows_path: Path = end_to_end.DEFAULT_ROWS) -> tuple
         extraction = {**(entry.get("extraction") or {}), **(entry.get("withheld") or {})}   # withheld values are checked too
         project = entry.get("project_name") or ""
         row = rows.get(entry["id"], {})
-        base = {"row_id": entry["id"], "project": project}
+        base = {"row_id": entry["id"], "project": project, "project_count": entry.get("project_count") or 1}
         done: dict[str, dict] = {}
         for field, check in sorted(entry["validation"]["fields"].items(), key=lambda kv: ORDER.get(kv[0], 0)):
             value = to_number(extraction.get(field))
             if field not in FIELDS or not value:
                 continue
             unit = extraction.get("project_area_unit") if field == "project_area" else extraction.get(end_to_end.CURRENCIES.get(field, ""))
-            cell = check_cell(text, project, field, value, unit, check, extraction.get("owner_ticker"), row.get("news_date"),
-                              extraction, done)
+            # the stored date (the release's), not the analyst's, some of which have day and month swapped
+            cell = check_cell(text, project, field, value, unit, check, extraction.get("owner_ticker"),
+                              extraction.get("news_date") or (entry.get("date") or "")[:10] or None, extraction, done,
+                              project_count=base["project_count"])
             cell["withheld"] = field in (entry.get("withheld") or {})
             done[field] = cell
             cells.append({**base, **cell})

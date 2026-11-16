@@ -4,15 +4,19 @@ The client defines share price as market data: "idealmente valor de la fecha de 
 del dia de scrap" (field sheet, 5 Sep 2025). This reads the daily close with yfinance (Yahoo Finance; unofficial
 endpoints, so a lookup can fail, and then the cell goes to review). Only a close within MAX_DAYS calendar days
 after the news date is accepted: a ticker that listed later (GGP.AX, listed June 2025) must not return a price
-from months afterwards. Results are cached in evals/.cache/market/.
+from months afterwards. Results are cached in .cache/market/ (PIPELINE_MARKET_CACHE to change).
+
+yfinance is an optional install (`pip install ".[market]"`). Without it `available()` is False, the pipeline looks
+nothing up, and a share price the model gives is stored but never counts as support for a derived value.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
-CACHE = Path(__file__).parent / ".cache" / "market"
+CACHE = Path(os.getenv("PIPELINE_MARKET_CACHE", Path(__file__).parent.parent / ".cache" / "market"))
 MAX_DAYS = 5
 SUFFIX = {"ASX": (".AX", "AUD"), "TSXV": (".V", "CAD"), "TSX-V": (".V", "CAD"), "TSX": (".TO", "CAD"), "CSE": (".CN", "CAD"),
           "NYSE": ("", "USD"), "NASDAQ": ("", "USD"), "LSE": (".L", "GBP"), "AIM": (".L", "GBP"), "JSE": (".JO", "ZAR")}
@@ -56,3 +60,11 @@ def close_on(ticker: str | None, day: str | None, history=None) -> dict | None:
     CACHE.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result or {}))
     return result
+
+
+def available() -> bool:
+    try:
+        import yfinance  # noqa: F401
+    except ImportError:
+        return False
+    return True

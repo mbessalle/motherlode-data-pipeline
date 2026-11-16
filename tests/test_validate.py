@@ -17,7 +17,7 @@ def status(extraction, text=OPTION):
 
 def test_values_written_in_the_article_are_found():
     s = status({"shares_amount": 2000000, "share_price": 0.25, "nsr_percent": 2, "interest_acquired_percent": 100,
-                "project_area": 4857})
+                "project_area": 4857, "project_area_unit": "ha"})
     assert {s[k] for k in ("shares_amount", "share_price", "nsr_percent", "interest_acquired_percent", "project_area")} == {FOUND}
 
 
@@ -106,10 +106,10 @@ def test_years_and_bare_numbers_are_not_amounts():
 def test_sums_never_mix_dollars_and_shares():
     text = "The Company will pay $1,000,000 and issue 2,000,000 common shares and 500,000 warrants."
     assert written_amounts(text, exclude="shares") == [1000000.0]
-    assert written_amounts(text, exclude="money") == [500000.0, 2000000.0]
+    assert written_amounts(text, exclude="money") == [2000000.0]       # warrants are not shares (critic N6)
     # 3,000,000 shares would only be reachable by adding dollars to shares
     assert status({"shares_amount": 3000000}, text)["shares_amount"] == NOT_FOUND
-    assert status({"shares_amount": 2500000}, text)["shares_amount"] == DERIVED
+    assert status({"shares_amount": 2500000}, text)["shares_amount"] == NOT_FOUND   # nor by adding warrants
 
 
 def test_schema_issues_block_even_when_values_are_grounded():

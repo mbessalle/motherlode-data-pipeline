@@ -28,6 +28,7 @@ from pathlib import Path
 
 from evals import end_to_end, jev
 from pipeline import telemetry
+from pipeline.buyer import BUYER, ROLE, deal_passage  # noqa: F401  (re-exported for cell_check)
 from pipeline.pdf import pdf_text
 from pipeline.search import company_words
 from pipeline.validate import DERIVED, FIELD_KIND, FOUND, PERCENT_FIELDS, find_number, to_number
@@ -129,22 +130,6 @@ FIELDS = {
 # These are judgments, not numbers, so no code checks them: the validator only checks numbers. The prompt asks the
 # model to put the BUYER in owner_name; nothing verified that it did until this check.
 
-OPENING_CHARS = 1200      # the opening paragraph usually says who acquires what
-_DEAL_TERMS = re.compile(r"acqui|purchas|\bsells?\b|\bsale\b|\bsold\b|vendor|option|earn[- ]?in|farm[- ]?(?:in|out)|"
-                         r"joint venture|\bjv\b|merger|takeover|consideration|agreement|transfer|divest", re.I)
-BUYER = jev.noul(
-    "Is named_company the buyer in this transaction: the company that acquires, or can earn, the interest in the project?",
-    yes="named_company acquires, purchases, earns into, farms into or takes an option over the project interest, or pays "
-        "the consideration for it (cash, its own shares, exploration spending); in a merger or takeover it is the "
-        "company that acquires the other.",
-    no="named_company is the vendor or seller: it sells, divests, grants the option, farms out, or receives the "
-       "payments or shares; or it is a third party (adviser, government, a partner that acquires nothing); or it is "
-       "not in the passage.")
-ROLE = jev.choice("What is named_company's role in the transaction in document_passage?", {
-    "buyer": "Acquires or earns the interest in the project and pays the consideration.",
-    "seller": "Sells, options out or farms out the project and receives the consideration.",
-    "other_party": "Takes part in some other way: adviser, government, partner that acquires nothing.",
-    "not_mentioned": "Does not appear in the passage."})
 TICKER = jev.noul(
     "Is ticker the stock ticker of the buyer in this transaction (the company that acquires or earns the interest)?",
     yes="The passage gives ticker for the company that acquires the interest, for example 'Acme Gold Ltd (ASX:ACM) "
@@ -160,22 +145,6 @@ DEAL_TYPE = jev.noul(
     yes="deal_type names the kind of transaction the passage describes (for example acquisition, sale, option, "
         "earn-in, farm-in, joint venture, merger), allowing other wording for the same thing.",
     no="deal_type names a different kind of transaction, or the passage describes no transaction of that kind.")
-
-
-def deal_passage(text: str, company: str) -> str:
-    """The opening of the announcement, plus the sentences that name the company together with a deal term."""
-    opening = text[:OPENING_CHARS]
-    stop = opening.rfind(". ")
-    opening = opening[:stop + 1] if stop > 0 else opening
-    words = company_words(company)
-    picked = []
-    for sentence in re.split(r"(?<=[.!?])\s+", text[len(opening):]):
-        low = sentence.lower()
-        if words and any(w in low for w in words) and _DEAL_TERMS.search(sentence) and len(sentence) < 600:
-            picked.append(sentence)
-        if len(picked) == 4:
-            break
-    return (opening + (" [...] " + " [...] ".join(picked) if picked else ""))[:MAX_PASSAGE]
 
 
 def is_same_company(a: str | None, b: str | None) -> bool:

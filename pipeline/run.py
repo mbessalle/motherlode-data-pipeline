@@ -8,14 +8,18 @@ from __future__ import annotations
 import collections
 import functools
 import json
+import os
 import re
 
-from . import config, llm, sources, telemetry
+from . import buyer, config, llm, market, sources, telemetry
 from .graph import Deps, build_graph, process_article
 from .search import Searcher
 from .store import PostgresStore, ReviewQueue
 
 STATE_FILE = "last_article_id.txt"
+FAILURES_FILE = "failed_articles.json"   # tries per article id that failed for a temporary reason
+MAX_TRIES = 3                            # after this many failed runs an article is reported and passed
+TEMPORARY_FAILURES = ("triage_failed", "classify_failed", "extract_failed", "db_error")
 DESCRIPTION_CHARS = 600
 
 
@@ -24,6 +28,9 @@ def classify(article: dict, locate, store) -> dict:
     context = (f"tags: '{article.get('tags', '')}', title: '{article.get('title', '')}', "
                f"description: '{article.get('description', '')}'")
     location = locate(context)
+    if location.get("error"):                         # a failed call, not "no continent" (critic N3)
+        return {"country": None, "continent": None, "table_name": None, "status": "classify_failed",
+                "error": location["error"]}
     continent = location.get("continent")
     result = {"country": location.get("country"), "continent": continent, "table_name": None, "status": "unclassified"}
     table = config.CONTINENT_TO_TABLE.get(continent)
@@ -34,6 +41,19 @@ def classify(article: dict, locate, store) -> dict:
     else:
         result["reason"] = "No continent determined." if not continent else f"Invalid continent: '{continent}'."
     return result
+
+
+def read_failures() -> dict[str, int]:
+    try:
+        with open(FAILURES_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def write_failures(failures: dict[str, int]) -> None:
+    with open(FAILURES_FILE, "w") as f:
+        json.dump(failures, f)
 
 
 def named_in(text: str, name: str) -> bool:
@@ -75,8 +95,12 @@ def project_parts(verdict: dict, text: str) -> list[str]:
     Which projects a deal covers is a judgment about the text, so the triage model gives the list; code only checks
     what is exact: every name must be written in the announcement. If any listed name is not, the list is not
     trusted and the deal stays one row under its group name. Empty when no name is written at all."""
-    name, listed = verdict.get("project_name") or "", [p for p in verdict.get("projects") or [] if p]
-    if len(listed) > 1 and all(named_in(text, p) for p in listed):
+    name, listed = verdict.get("project_name") or "", []
+    for p in verdict.get("projects") or []:              # no repeats, compared case-insensitively (critic N9)
+        if p and p.lower() not in (q.lower() for q in listed):
+            listed.append(p)
+    contained = any(a != b and a.lower() in b.lower() for a in listed for b in listed)
+    if listed and not contained and all(named_in(text, p) for p in listed):
         return listed
     return [name] if named_in(text, name) else []
 
@@ -104,11 +128,15 @@ def run(settings=None, store=None, client=None, searcher=None, fetch=sources.fet
         owns_store = store is None
         store = store or PostgresStore.connect(settings)
         texts: dict[str, str] = {}
+        failures = read_failures()
         try:
             deps = Deps(
                 scrape=texts.get,   # the announcement was already read while finding it
                 extract=functools.partial(llm.extract_deal, client, settings.extract_model),
                 store=store, review=ReviewQueue(settings.review_queue_path), max_attempts=settings.max_extract_attempts,
+                market=market.close_on if market.available() and os.getenv("PIPELINE_MARKET_LOOKUP", "1") != "0" else None,
+                # Jev's buyer check, when an OpenRouter key is set (about 0.00004 USD a deal)
+                buyer=buyer.check if os.getenv("OPENROUTER_API_KEY") and os.getenv("PIPELINE_BUYER_CHECK", "1") != "0" else None,
             )
             app = build_graph(deps)
             locate = functools.partial(llm.classify_location, client, settings.classify_model)
@@ -133,37 +161,49 @@ def run(settings=None, store=None, client=None, searcher=None, fetch=sources.fet
                                        f"{kind}; project {verdict['project_name']!r}; {verdict['reason']}")
                 base = {"id": article["id"], "headline": article["title"], "company": article["company"],
                         "date": article["date"], "listing_link": article["listing_link"], **details}
+                entries: list[dict] = []
                 if stop is not None:
-                    outcomes[stop] += 1
-                    telemetry.progress(article["id"], "RESULT", stop)
-                    report.append({**base, "project_name": article.get("project_name"), "outcome": stop})
-                    if stop == "triage_failed":
-                        # Progress stops before this article, so the next run screens it again instead of losing it.
-                        last_id = previous_id
-                        break
-                    continue
-                texts[article["link"]] = article.pop("text")
-                projects = article.pop("projects")
-                for project in projects:                      # one row per project; shared values are split in N
+                    entries.append({**base, "project_name": article.get("project_name"), "outcome": stop})
+                else:
+                    texts[article["link"]] = article.pop("text")
+                    projects = article.pop("projects")
+                for project in (projects if stop is None else []):   # one row per project; shared values split in N
                     one = {**article, "project_name": project, "project_count": len(projects)}
                     one["classification"] = classify(one, locate, store)
                     telemetry.progress(one["id"], "region", f"{one['classification']['continent']} -> table "
                                        f"{one['classification']['table_name']} ({one['classification']['status']})")
-                    final = process_article(app, one)
+                    final = {"outcome": "classify_failed"} if one["classification"]["status"] == "classify_failed" \
+                        else process_article(app, one)
                     outcome = final.get("outcome", "unknown")
-                    outcomes[outcome] += 1
-                    telemetry.progress(one["id"], "RESULT", f"{outcome}; project {project!r}"
-                                       + (f"; withheld: {', '.join(final['withheld'])}" if final.get("withheld") else ""))
                     text = final.get("text") or ""
-                    report.append({
+                    entries.append({
                         **base, "project_name": project, "group_name": article["project_name"] if len(projects) > 1 else None,
                         "project_count": len(projects), "classification": one["classification"],
                         "table": final.get("table"), "status": final.get("status"), "outcome": outcome,
                         "attempts": final.get("attempts", 0), "article_chars": len(text),
                         "text_cut": len(text) > llm.ARTICLE_CHAR_LIMIT,   # the model saw a deal-centred window
                         "extraction": final.get("extraction"), "withheld": final.get("withheld"),
+                        "buyer_check": final.get("buyer_check"),
                         "validation": final.get("report"),
                     })
+                # A temporary failure (a failed model call, a database error) holds progress before this article,
+                # so the next run tries it again; after MAX_TRIES runs it is reported as failed for good and passed,
+                # so one bad article cannot block every later run (critic N2, N3).
+                failed = any(e["outcome"] in TEMPORARY_FAILURES for e in entries)
+                tries = failures.pop(str(article["id"]), 0) + 1 if failed else 0
+                if failed and tries >= MAX_TRIES:
+                    for e in entries:
+                        if e["outcome"] in TEMPORARY_FAILURES:
+                            e["outcome"] += f"_after_{tries}_tries"
+                for e in entries:
+                    outcomes[e["outcome"]] += 1
+                    telemetry.progress(article["id"], "RESULT", f"{e['outcome']}; project {e.get('project_name')!r}"
+                                       + (f"; withheld: {', '.join(e['withheld'])}" if e.get("withheld") else ""))
+                    report.append(e)
+                if failed and tries < MAX_TRIES:
+                    failures[str(article["id"])] = tries
+                    last_id = previous_id
+                    break
         finally:
             if owns_store:
                 store.close()
@@ -171,6 +211,7 @@ def run(settings=None, store=None, client=None, searcher=None, fetch=sources.fet
         # Only after the articles were handled is progress recorded, so a crashed run is retried in full.
         if last_id is not None:                       # nothing handled (the first triage failed): state stays as it was
             sources.write_state(STATE_FILE, str(last_id))
+        write_failures(failures)
         with open(settings.run_report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=1, default=str)   # what each candidate produced, for a person to inspect
         run_span.set_attribute("pipeline.candidates", candidates)

@@ -63,19 +63,34 @@ def _forms(x: float) -> set[str]:
     return {s, f"{int(s):,}"}
 
 
-MONEY, SHARES, OTHER = "money", "shares", "other"
+MONEY, SHARES, OPTIONS, OTHER = "money", "shares", "options", "other"
 FIELD_KIND = {"cash_payments_value": MONEY, "exp_comit_value": MONEY, "shares_value": MONEY, "aggregate_deal_value": MONEY,
               "shares_value_scraped": MONEY, "drilling_value": MONEY, "owner_marketcap": MONEY, "shares_amount": SHARES}
 _CURRENCY_BEFORE = re.compile(r"(?:[A-Z]{0,2}\$|\b(?:CAD|USD|AUD|EUR|GBP|NZD))\s?$")
 _CURRENCY_LOOKBEHIND = r"(?:(?<=\$)|(?<=\$ )|(?<=CAD )|(?<=USD )|(?<=AUD )|(?<=CAD)|(?<=USD)|(?<=AUD))"
 _MONEY_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:dollars|in cash)\b", re.I)
-_SHARES_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:[a-z-]+\s){0,3}(?:shares|units|warrants)\b", re.I)
+_SHARES_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:[a-z-]+\s){0,3}(?:shares|units)\b", re.I)
+# options, warrants and performance rights are not consideration shares and never enter a share count (critic N6)
+_OPTIONS_AFTER = re.compile(r"\s*(?:million\s+|thousand\s+)?(?:[a-z-]+\s){0,3}"
+                            r"(?:options|warrants|performance rights|rights)\b", re.I)
+_CURRENCY_CODES = ("AUD", "CAD", "USD", "EUR", "GBP", "NZD", "US", "A", "C")
+
+
+def glued_to_letters(text: str, start: int) -> bool:
+    """A number glued to letters is part of an identifier ("BVRB105", a drill hole), not a value; a currency code
+    glued to it ("AUD250,000", "US$") is still a value (critic N4)."""
+    if start == 0 or not text[start - 1].isalpha():
+        return False
+    letters = re.search(r"[A-Za-z]+$", text[max(0, start - 6):start]).group(0)
+    return letters.upper() not in _CURRENCY_CODES
 
 
 def occurrence_kind(text: str, start: int, end: int) -> str:
     """What a number at text[start:end] counts: money, a share count, or neither."""
     if _CURRENCY_BEFORE.search(text[max(0, start - 5):start]) or _MONEY_AFTER.match(text[end:end + 30]):
         return MONEY
+    if _OPTIONS_AFTER.match(text[end:end + 50]):
+        return OPTIONS
     if _SHARES_AFTER.match(text[end:end + 50]):
         return SHARES
     return OTHER
@@ -98,10 +113,12 @@ def find_number(text: str, x: float, percent: bool = False, kind: str | None = N
         # a bare "1m" is a metre in an exploration release ("1m @ 6.15 g/t"); it is a million only after a currency sign
         patterns += [_CURRENCY_LOOKBEHIND + re.escape(f) + r"\s*m\b" for f in _forms(x / 1e6)]
         patterns += [r"(?<![\d.,])" + re.escape(f) + r"\s*(?:thousand|k\b)" for f in _forms(x / 1e3)]
-    other = {MONEY: SHARES, SHARES: MONEY}.get(kind)
+    other = {MONEY: (SHARES, OPTIONS), SHARES: (MONEY, OPTIONS)}.get(kind, ())
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.I):
-            if other and occurrence_kind(text, match.start(), match.end()) == other:
+            if glued_to_letters(text, match.start()):
+                continue
+            if other and occurrence_kind(text, match.start(), match.end()) in other:
                 continue
             start, end = max(0, match.start() - 90), min(len(text), match.end() + 90)
             return re.sub(r"\s+", " ", text[start:end]).strip()
@@ -113,13 +130,17 @@ _AMOUNT = re.compile(
     r"\s*(?P<unit>million|thousand|m\b|k\b)?(?=(?P<after>[^.;\n|]{0,40}))", re.I)
 
 
+MARKET_TOLERANCE = 0.10   # a share price within 10% of the market close counts as the market price
 SUM_WINDOW = 1500   # the terms of a sum must be written within this many characters of each other
 _COUNT_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "both": 2}
-_STATED_COUNT = re.compile(r"\b(2|3|4|5|6|two|three|four|five|six|both)\s+(?:[a-z-]+\s){0,2}"
-                           r"(?:projects?|properties|tenements|licences|licenses|project areas|claim blocks)\b", re.I)
+# Only project nouns count, with real words between ("the five Option Projects"); tenements and licences do not,
+# because one project often has several ("70% of 3 tenements"), and "Figure 2 - Project Location" is a caption.
+_STATED_COUNT = re.compile(r"(?<!figure )(?<!fig\. )(?<!table )(?<!appendix )(?<!section )"
+                           r"\b(2|3|4|5|6|two|three|four|five|six|both)\s+(?:[a-z]+\s){0,2}"
+                           r"(?:projects|properties|project areas)\b", re.I)
 
 
-def written_amounts_at(text: str, exclude: str | None = None) -> list[tuple[float, int]]:
+def written_amounts_at(text: str, exclude: str | None = None, only: str | None = None) -> list[tuple[float, int]]:
     """Amounts written in the text with their positions, with repeats. A bare number such as a year does not
     count: it needs a thousands separator, a currency sign, or a million/thousand unit. "m" counts as million only
     after a currency sign ("$1m"), because "1m" in an exploration release is a metre.
@@ -137,8 +158,10 @@ def written_amounts_at(text: str, exclude: str | None = None) -> list[tuple[floa
         value *= 1e6 if unit in ("million", "m") else 1e3 if unit in ("thousand", "k") else 1
         if value < 1000:
             continue
+        if glued_to_letters(text, m.start("num")) and not m.group("cur"):
+            continue
         kind = MONEY if m.group("cur") else occurrence_kind(text, m.start("num"), m.end())
-        if kind != exclude:
+        if kind != exclude and kind != OPTIONS and (only is None or kind == only):
             out.append((value, m.start("num")))
     return out
 
@@ -234,11 +257,14 @@ class Report:
         }
 
 
-def validate(extraction: dict, article_text: str, project_count: int = 1) -> Report:
+def validate(extraction: dict, article_text: str, project_count: int = 1, market_price: dict | None = None) -> Report:
     """`project_count` is the number of projects the row stands for (a deal over "A and B" processed as one row per
-    project gives 2), so a total shared by that many projects is accepted when split."""
+    project gives 2), so a total shared by that many projects is accepted when split. `market_price` is the buyer's
+    close on the news date ({'close', 'date', 'symbol'}), looked up by code; a share price not written in the
+    announcement counts for derived values only when it matches that close."""
     text = article_text.replace("\xa0", " ").replace("’", "'")
-    money_amounts, share_amounts = written_amounts_at(text, exclude=SHARES), written_amounts_at(text, exclude=MONEY)
+    # a share count is summed only from amounts written as shares, never from options or table numbers (critic N6)
+    money_amounts, share_amounts = written_amounts_at(text, exclude=SHARES), written_amounts_at(text, only=SHARES)
     report = Report(schema_issues=schema.issues(extraction))
     values = {name: to_number(extraction.get(name)) for name in CHECKED_FIELDS}
 
@@ -252,18 +278,26 @@ def validate(extraction: dict, article_text: str, project_count: int = 1) -> Rep
             report.fields[name] = FieldCheck(FOUND, x, snippet)
         elif name in MARKET_FIELDS:
             # The client defines share price (and market cap) as market data on the news date, not a number the
-            # announcement must state: a later step compares it with the market (evals/market.py), it does not block.
-            report.fields[name] = FieldCheck(MARKET, x, "market data: not stated in the announcement")
+            # announcement must state, so it never blocks. A price counts as support for shares_value only when it
+            # matches the close code looked up (critic N7); an unconfirmed one is only stored.
+            close = (market_price or {}).get("close") if name == "share_price" else None
+            if close and _close(x, close, MARKET_TOLERANCE):
+                where = f"{market_price['date']} ({market_price['symbol']})"
+                report.fields[name] = FieldCheck(MARKET, x, f"close {close:g} on {where}")
+            else:
+                report.fields[name] = FieldCheck(MARKET, x, "market data, not confirmed")
         else:
             report.fields[name] = FieldCheck(NOT_FOUND, x)
 
     # An area is only an area in a unit that can be converted to hectares ("33 sub-blocks" is not one).
-    unit = (extraction.get("project_area_unit") or "ha").strip().lower()
+    unit = (extraction.get("project_area_unit") or "").strip().lower()
     if values["project_area"] and schema.HECTARES_PER_UNIT.get(unit) is None:
-        report.fields["project_area"] = FieldCheck(NOT_FOUND, values["project_area"], f"unit {unit!r} is not an area")
+        why = f"unit {unit!r} is not an area" if unit else "no unit, so it cannot be stored in hectares"
+        report.fields["project_area"] = FieldCheck(NOT_FOUND, values["project_area"], why)
 
     def supported(name: str) -> bool:
-        return report.fields[name].status in (FOUND, DERIVED, MARKET)
+        check = report.fields[name]
+        return check.status in (FOUND, DERIVED) or (check.status == MARKET and (check.evidence or "").startswith("close"))
 
     def derive(name: str, evidence: str | None) -> None:
         if evidence and report.fields[name].status == NOT_FOUND:
@@ -283,7 +317,8 @@ def validate(extraction: dict, article_text: str, project_count: int = 1) -> Rep
     # Exploration commitments stated in metres are converted at a fixed rate.
     if report.fields["exp_comit_value"].status == NOT_FOUND:
         metres = values["exp_comit_value"] / DRILLING_USD_PER_METRE
-        if metres == int(metres) and find_number(text, metres):
+        if metres == int(metres) and re.search(r"(?<![\d.,])" + re.escape(f"{int(metres):,}").replace(",", ",?")
+                                               + r"\s*(?:m\b|metres|meters)", text):   # metres, not "$4,000" (N8)
             derive("exp_comit_value", f"{metres:,.0f} metres x {DRILLING_USD_PER_METRE} USD")
 
     # shares_value is stated in the article, or it is shares x price with both inputs supported.
