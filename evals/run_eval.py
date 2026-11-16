@@ -67,6 +67,31 @@ def extraction(client, model: str, case: dict, attempt: int, feedback: str | Non
     return result
 
 
+TRIAGE_VERSION = hashlib.sha256(llm.TRIAGE_SYSTEM_PROMPT.encode()).hexdigest()[:8]
+
+
+def project_count(case: dict, text: str) -> int:
+    """How many projects the deal covers, as production decides it: the triage model lists them and code checks
+    each name is written (pipeline.run.project_parts). Replies are cached per triage prompt version."""
+    from pipeline.run import project_parts
+
+    path = CACHE / "triage" / TRIAGE_VERSION / f"{case['id']}.json"
+    if path.exists():
+        verdict = json.loads(path.read_text())
+    else:
+        import openai
+
+        settings = config.load()
+        key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
+        client = openai.OpenAI(api_key=key) if key else openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1", api_key=os.environ["OPENROUTER_API_KEY"])
+        model = settings.classify_model if key else f"openai/{settings.classify_model}"
+        verdict = llm.triage(client, model, case.get("title") or case["project"], case.get("company") or "", text)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(verdict))
+    return len(project_parts(verdict, text)) or 1
+
+
 def agrees(a, b) -> bool:
     a, b = to_number(a), to_number(b)
     return a is not None and b is not None and abs(a - b) <= max(0.011, 0.01 * abs(b))
@@ -88,12 +113,13 @@ def score(args) -> None:
 
     def run_case(case: dict) -> dict:
         text = " ".join(text_path(case).read_text().split())
+        count = project_count(case, text) if args.projects else 1
         first = extraction(client, args.model, case, 1, None)
-        report1 = validate(first, text)
+        report1 = validate(first, text, count)
         final, report = first, report1
         if args.retry and not report1.passed:
             final = extraction(client, args.model, case, 2, report1.feedback())
-            report = validate(final, text)
+            report = validate(final, text, count)
         return {"case": case, "first": report1, "final": report, "extraction": final, "retried": final is not first}
 
     with ThreadPoolExecutor(4) as pool:
@@ -150,6 +176,8 @@ def main() -> None:
     s = sub.add_parser("score")
     s.add_argument("--model", default="gpt-6.1-terra")
     s.add_argument("--retry", action="store_true")
+    s.add_argument("--projects", action="store_true",
+                   help="give the validator the triage model's number of projects, as the pipeline does")
     s.set_defaults(run=score)
     args = parser.parse_args()
     args.run(args)
